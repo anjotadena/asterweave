@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://anjokoi.dev/asterweave/stack-profile.schema.json",
+  "title": "Asterweave stack profile",
+  "type": "object",
+  "required": ["root", "languages", "frameworks", "packageManagers", "commands", "signals"],
+  "additionalProperties": false,
+  "properties": {
+    "root": { "type": "string" },
+    "languages": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "frameworks": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "packageManagers": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "commands": {
+      "type": "object",
+      "additionalProperties": { "type": "array", "items": { "type": "string" } }
+    },
+    "signals": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "warnings": { "type": "array", "items": { "type": "string" } }
+  }
+}

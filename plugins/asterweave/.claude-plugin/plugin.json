@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "asterweave",
+  "displayName": "Asterweave",
+  "version": "0.1.0",
+  "description": "Graph paths woven into reliable delivery through deterministic orchestration, bounded engineering loops, specialist subagents, stack-aware quality gates, and GitHub issue-to-PR automation.",
+  "author": {
+    "name": "Anjokoi Engineering"
+  },
+  "license": "MIT",
+  "keywords": [
+    "agentic-coding",
+    "loop-engineering",
+    "graph-engineering",
+    "github",
+    "testing",
+    "security",
+    "enterprise"
+  ],
+  "defaultEnabled": false,
+  "userConfig": {
+    "github_token": {
+      "type": "string",
+      "title": "GitHub token",
+      "description": "Fine-grained GitHub token with access only to repositories and operations you want Asterweave to use.",
+      "sensitive": true,
+      "required": true
+    }
+  }
+}

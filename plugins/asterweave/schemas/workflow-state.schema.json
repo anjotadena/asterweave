@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://anjokoi.dev/asterweave/workflow-state.schema.json",
+  "title": "Asterweave workflow state",
+  "type": "object",
+  "required": ["schemaVersion", "workflowId", "goal", "status", "currentNode", "nodes", "createdAt", "updatedAt"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "workflowId": { "type": "string", "minLength": 8 },
+    "goal": { "type": "string", "minLength": 1 },
+    "source": { "type": ["string", "null"] },
+    "status": { "enum": ["active", "blocked", "aborted", "completed"] },
+    "currentNode": {
+      "enum": ["intake", "analyze", "challenge", "plan", "approve", "implement", "test", "verify", "review", "submit-pr", "done"]
+    },
+    "nodes": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["status", "attempts", "maxAttempts", "evidence"],
+        "additionalProperties": false,
+        "properties": {
+          "status": { "enum": ["pending", "running", "passed", "failed", "blocked", "skipped"] },
+          "attempts": { "type": "integer", "minimum": 0 },
+          "maxAttempts": { "type": "integer", "minimum": 1 },
+          "startedAt": { "type": ["string", "null"], "format": "date-time" },
+          "completedAt": { "type": ["string", "null"], "format": "date-time" },
+          "outcome": { "type": ["string", "null"] },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["kind", "summary", "recordedAt"],
+              "additionalProperties": false,
+              "properties": {
+                "kind": { "type": "string", "minLength": 1 },
+                "summary": { "type": "string", "minLength": 1 },
+                "path": { "type": ["string", "null"] },
+                "command": { "type": ["string", "null"] },
+                "result": { "enum": ["pass", "fail", "info"] },
+                "recordedAt": { "type": "string", "format": "date-time" }
+              }
+            }
+          },
+          "failureSignatures": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "stackProfile": { "type": ["object", "null"] },
+    "approvals": { "type": "array", "items": { "type": "object" } },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  }
+}

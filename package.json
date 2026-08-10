@@ -1,0 +1,14 @@
+{
+  "name": "asterweave-marketplace",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test plugins/asterweave/tests/*.test.mjs",
+    "validate": "node plugins/asterweave/scripts/validate-plugin.mjs plugins/asterweave",
+    "check": "npm run validate && npm test"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
