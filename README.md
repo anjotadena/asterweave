@@ -41,7 +41,7 @@ The model reasons inside a graph node. Deterministic scripts own state, attempt 
 - 15 namespaced workflow skills, including `/asterweave:scaffold`, `/asterweave:daily`, `/asterweave:deliver`, `/asterweave:challenge`, `/asterweave:test`, and `/asterweave:submit-pr`.
 - 13 specialist agents for repository analysis, scaffold design/audit, requirements challenge, architecture, implementation, testing, runtime verification, staff review, security review, failure diagnosis, orchestration, and PR handling.
 - A GitHub MCP connection for issues, PRs, CI checks, code scanning, and secret scanning.
-- Cross-platform Node scripts for stack detection, graph state/event history, plugin validation, destructive-operation blocking, and evidence-aware continuation.
+- Cross-platform Node scripts for stack detection, graph state/event history, plugin validation, test discovery, destructive-operation blocking, and evidence-aware continuation.
 - Progressive stack rule packs for .NET/ASP.NET Core/WPF/Windows Forms, Angular/React/React Native/Node/Next/Nest/Electron, PHP/Laravel, WordPress, Python/Django, Flutter, and mobile concerns.
 - Unit tests for graph routing, recovery, evidence replacement, stack discovery, and hooks.
 - Transactional repository scaffolding with exact-hash drift protection, secret/path/symlink checks, independent audit, approved blueprint digests, and a committed ownership manifest.

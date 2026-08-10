@@ -18,7 +18,7 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
 import { detectStack } from "./detect-stack.mjs";
 
 const SCAFFOLD_VERSION = 1;
-const DEFAULT_PLUGIN_VERSION = "0.2.0";
+const DEFAULT_PLUGIN_VERSION = "0.2.1";
 const MANIFEST_PATH = ".claude/asterweave-scaffold.json";
 const TRANSIENT_PREFIX = ".claude/asterweave/";
 const MAX_ARTIFACTS = 60;

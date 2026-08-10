@@ -18,6 +18,13 @@ test("marketplace and plugin manifests agree", () => {
   assert.equal(plugin.userConfig.github_token.sensitive, true);
 });
 
+test("npm test uses the cross-platform test launcher", () => {
+  const packageManifest = JSON.parse(readFileSync(resolve(repositoryRoot, "package.json"), "utf8"));
+  assert.equal(packageManifest.scripts.test, "node plugins/asterweave/scripts/run-tests.mjs");
+  assert.equal(existsSync(resolve(pluginRoot, "scripts", "run-tests.mjs")), true);
+  assert.doesNotMatch(packageManifest.scripts.test, /[*?]/);
+});
+
 test("GitHub MCP uses sensitive substitution and narrowed toolsets", () => {
   const mcp = JSON.parse(readFileSync(resolve(pluginRoot, ".mcp.json"), "utf8"));
   const github = mcp.mcpServers.github;

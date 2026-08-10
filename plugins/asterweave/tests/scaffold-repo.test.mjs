@@ -28,7 +28,7 @@ function artifact(path, kind, content, evidence = ["package.json"], extra = {}) 
 function completeBlueprint() {
   return {
     schemaVersion: 1,
-    pluginVersion: "0.2.0",
+    pluginVersion: "0.2.1",
     summary: "Angular repository scaffold",
     artifacts: [
       artifact("CLAUDE.md", "instructions", "# Repository instructions\n\nUse [repository details](.claude/references/repository.md).\n"),
@@ -75,7 +75,7 @@ test("requires exact current hashes and rejects drift between approval and apply
   writeFileSync(join(root, "CLAUDE.md"), original);
   const blueprint = {
     schemaVersion: 1,
-    pluginVersion: "0.2.0",
+    pluginVersion: "0.2.1",
     summary: "Merge existing instructions",
     artifacts: [artifact("CLAUDE.md", "instructions", "# Existing\n\nKeep changes scoped.\n", ["package.json"], { operation: "replace" })],
   };
@@ -101,7 +101,7 @@ test("refresh updates approved files and marks untouched managed artifacts stale
   const current = readFileSync(join(root, "CLAUDE.md"), "utf8");
   const refresh = {
     schemaVersion: 1,
-    pluginVersion: "0.2.0",
+    pluginVersion: "0.2.1",
     summary: "Refresh concise root instructions",
     artifacts: [artifact("CLAUDE.md", "instructions", `${current}\nUse repository-native test commands.\n`, ["package.json"], {
       operation: "replace",
@@ -122,7 +122,7 @@ test("rejects path traversal, likely secrets, and unresolved placeholders", () =
   writeFileSync(join(root, "package.json"), "{}\n");
   const blueprint = {
     schemaVersion: 1,
-    pluginVersion: "0.2.0",
+    pluginVersion: "0.2.1",
     summary: "Unsafe proposal",
     artifacts: [
       artifact("../CLAUDE.md", "instructions", "# Escaped\n"),
@@ -148,7 +148,7 @@ test("rejects writes through a symlinked configuration directory", (t) => {
   }
   const blueprint = {
     schemaVersion: 1,
-    pluginVersion: "0.2.0",
+    pluginVersion: "0.2.1",
     summary: "Symlink proposal",
     artifacts: [artifact(".claude/rules/app.md", "rule", "---\npaths:\n  - \"src/**\"\n---\n\n# App\n\nKeep changes scoped.\n")],
   };
@@ -163,7 +163,7 @@ test("rejects destructive quality gates and missing adapter definitions", () => 
   writeFileSync(join(root, "package.json"), "{}\n");
   const blueprint = {
     schemaVersion: 1,
-    pluginVersion: "0.2.0",
+    pluginVersion: "0.2.1",
     summary: "Unsafe adapter",
     artifacts: [artifact(".claude/asterweave.json", "adapter", `${JSON.stringify({
       version: 1,
