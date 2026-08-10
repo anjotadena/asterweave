@@ -11,7 +11,10 @@ test("marketplace and plugin manifests agree", () => {
   const plugin = JSON.parse(readFileSync(resolve(pluginRoot, ".claude-plugin", "plugin.json"), "utf8"));
   const entry = marketplace.plugins.find((candidate) => candidate.name === plugin.name);
   assert.ok(entry);
-  assert.equal(entry.version, plugin.version);
+  // plugin.json is the single source of truth for the version; declaring it in the
+  // catalog entry as well can mask a newer plugin manifest during resolution.
+  assert.equal(entry.version, undefined);
+  assert.equal(marketplace.name, "at-digital-labs");
   assert.equal(entry.source, "./plugins/asterweave");
   assert.equal(existsSync(resolve(repositoryRoot, entry.source)), true);
   assert.equal(plugin.defaultEnabled, false);

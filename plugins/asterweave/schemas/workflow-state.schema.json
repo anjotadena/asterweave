@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://anjokoi.dev/asterweave/workflow-state.schema.json",
+  "$id": "https://at-digital-labs.dev/asterweave/workflow-state.schema.json",
   "title": "Asterweave workflow state",
   "type": "object",
   "required": ["schemaVersion", "workflowId", "goal", "status", "currentNode", "nodes", "createdAt", "updatedAt"],

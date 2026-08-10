@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://anjokoi.dev/asterweave/stack-profile.schema.json",
+  "$id": "https://at-digital-labs.dev/asterweave/stack-profile.schema.json",
   "title": "Asterweave stack profile",
   "type": "object",
   "required": ["root", "languages", "frameworks", "packageManagers", "commands", "signals"],
