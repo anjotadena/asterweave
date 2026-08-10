@@ -15,10 +15,11 @@ Work on `$ARGUMENTS`. Read these contracts before acting:
 - [evidence contract](../../references/evidence-contract.md)
 - [Git and destructive-operation safety](../../references/git-safety.md)
 - [security policy](../../references/security.md)
+- [repository adapter](../../references/repository-adapter.md)
 
 ## Initialize or resume
 
-1. Inspect repository instructions, status, architecture, and existing patterns before editing.
+1. Inspect repository instructions, status, architecture, and existing patterns before editing. Run `node "${CLAUDE_SKILL_DIR}/../../scripts/scaffold-repo.mjs" verify --root .`; managed-artifact drift or an invalid adapter blocks write stages until resolved. Absence of a scaffold is allowed.
 2. If an unfinished `.claude/asterweave/state.json` exists, summarize it and resume only when it matches this goal. Otherwise initialize:
 
    `node "${CLAUDE_SKILL_DIR}/../../scripts/graph-state.mjs" init --goal "$ARGUMENTS" --source "$ARGUMENTS"`
@@ -34,10 +35,10 @@ For each node, run `enter <node>`, complete its contract, record evidence, then 
 3. `challenge`: delegate to `asterweave:requirements-challenger`. Resolve contradictions and missing acceptance criteria. If material questions remain, complete with `needs-human` and ask the user.
 4. `plan`: delegate to `asterweave:architect`. Produce a change DAG, exact boundaries, test plan, risks, migrations, observability, and rollback. Record `plan` evidence.
 5. `approve`: show the plan and obtain explicit human approval before code edits, dependency changes, or migrations. Record it only with `approve --by ... --summary ...`.
-6. `implement`: load only the detected stack rules. For small sequential changes, implement in the main context. For an isolated assignment, use `asterweave:implementer` and integrate its worktree only after reviewing its diff. Record `change` evidence with the diff/commit reference.
-7. `test`: delegate to `asterweave:test-engineer`. Run changed-area unit tests, required integration/contract tests, build, lint/static analysis, and broader regression tests proportional to risk. Record `unit-test` and `integration-test` evidence; use explicit `skipped` evidence only when a test category is genuinely not applicable and explain why.
-8. `verify`: delegate to `asterweave:verification-engineer` with the approved criteria. Verify runtime behavior in the appropriate application, device, browser, API, CLI, or desktop environment. Record `acceptance` evidence.
-9. `review`: run `asterweave:staff-reviewer` and `asterweave:security-reviewer` independently, in parallel only when safe. Record `code-review` and `security-review` evidence.
+6. `implement`: resolve the repository adapter route, load only configured project skills and detected stack rules, then use its project agent or `asterweave:implementer`. Integrate isolated work only after reviewing its diff. Record `change` evidence with the diff/commit reference.
+7. `test`: resolve the project route or use `asterweave:test-engineer`. Run changed-area unit tests, required integration/contract tests, configured quality gates, build, lint/static analysis, and broader regression tests proportional to risk. Record `unit-test` and `integration-test` evidence; use explicit `skipped` evidence only when a test category is genuinely not applicable and explain why.
+8. `verify`: resolve the project route or use `asterweave:verification-engineer` with the approved criteria. Verify runtime behavior in the appropriate application, device, browser, API, CLI, or desktop environment. Record `acceptance` evidence.
+9. `review`: resolve the project staff-review route or use `asterweave:staff-reviewer`, and always run `asterweave:security-reviewer` independently. Parallelize only when safe. Record `code-review` and `security-review` evidence.
 10. If test, verification, or review fails, record a stable failure signature and follow the graph back to implementation. Never repeat the same unsuccessful action twice without a new hypothesis or state change.
 11. `submit-pr`: re-run final diff and Git safety checks. Unless `$ARGUMENTS` contains `--auto-pr`, obtain confirmation before commit/push/PR creation. Use `asterweave:pr-engineer` and the GitHub MCP. Record `pull-request` evidence.
 

@@ -2,7 +2,20 @@
 
 Graph paths woven into reliable delivery.
 
-Asterweave is an enterprise Claude Code plugin that turns feature and defect delivery into an evidence-driven graph with bounded repair loops:
+Asterweave is an enterprise Claude Code plugin that first adapts itself to a repository, then turns feature and defect delivery into an evidence-driven graph with bounded repair loops.
+
+Repository setup uses its own guarded graph:
+
+```mermaid
+flowchart LR
+    A[Discover] --> B[Model]
+    B --> C[Propose]
+    C --> D[Independent audit]
+    D --> E{Human approval}
+    E -->|revise| C
+    E -->|approved digest| F[Apply]
+    F --> G[Validate + diff]
+```
 
 ```mermaid
 flowchart TD
@@ -25,12 +38,14 @@ The model reasons inside a graph node. Deterministic scripts own state, attempt 
 
 ## What is included
 
-- 14 namespaced workflow skills, including `/asterweave:daily`, `/asterweave:deliver`, `/asterweave:challenge`, `/asterweave:test`, and `/asterweave:submit-pr`.
-- 11 specialist agents for repository analysis, requirements challenge, architecture, implementation, testing, runtime verification, staff review, security review, failure diagnosis, orchestration, and PR handling.
+- 15 namespaced workflow skills, including `/asterweave:scaffold`, `/asterweave:daily`, `/asterweave:deliver`, `/asterweave:challenge`, `/asterweave:test`, and `/asterweave:submit-pr`.
+- 13 specialist agents for repository analysis, scaffold design/audit, requirements challenge, architecture, implementation, testing, runtime verification, staff review, security review, failure diagnosis, orchestration, and PR handling.
 - A GitHub MCP connection for issues, PRs, CI checks, code scanning, and secret scanning.
 - Cross-platform Node scripts for stack detection, graph state/event history, plugin validation, destructive-operation blocking, and evidence-aware continuation.
 - Progressive stack rule packs for .NET/ASP.NET Core/WPF/Windows Forms, Angular/React/React Native/Node/Next/Nest/Electron, PHP/Laravel, WordPress, Python/Django, Flutter, and mobile concerns.
 - Unit tests for graph routing, recovery, evidence replacement, stack discovery, and hooks.
+- Transactional repository scaffolding with exact-hash drift protection, secret/path/symlink checks, independent audit, approved blueprint digests, and a committed ownership manifest.
+- Deterministic routing from reusable plugin stages to project-specific skills, agents, and repository-native quality gates through `.claude/asterweave.json`.
 
 Asterweave does not impose Clean Architecture, DDD, CQRS, MVVM, Redux, or any other preferred pattern. It discovers and preserves the architecture already present.
 
@@ -60,8 +75,8 @@ Start Claude Code from the directory containing this repository, then run:
 
 ```text
 /plugin marketplace add ./asterweave-marketplace
-/plugin install asterweave@anjokoi-engineering
-/plugin enable asterweave@anjokoi-engineering
+/plugin install asterweave@at-digital-labs
+/plugin enable asterweave@at-digital-labs
 /reload-plugins
 /asterweave:doctor
 ```
@@ -70,7 +85,7 @@ When enabled, Claude Code prompts for the GitHub token and stores it as sensitiv
 
 ### Migrate from LoopForge
 
-The rename changes the plugin identity and command namespace. Finish or pause any active LoopForge workflow, disable and uninstall `loopforge@anjokoi-engineering`, then install Asterweave using the commands above. Do not keep both plugins enabled because they register equivalent hooks and GitHub MCP behavior.
+The rename changes the plugin identity and command namespace. Finish or pause any active LoopForge workflow, disable and uninstall `loopforge@at-digital-labs`, then install Asterweave using the commands above. Do not keep both plugins enabled because they register equivalent hooks and GitHub MCP behavior.
 
 Existing workflow state is not migrated automatically. If an unfinished workflow must be resumed, first verify that `.claude/asterweave/` does not exist, then rename `.claude/loopforge/` to `.claude/asterweave/`. Keep a backup until `/asterweave:doctor` and `/asterweave:resume` confirm the state is valid.
 
@@ -83,10 +98,34 @@ claude --plugin-dir ./asterweave-marketplace/plugins/asterweave
 ## Daily use
 
 ```text
+/asterweave:scaffold --dry-run
+/asterweave:scaffold
 /asterweave:daily owner/repository
 /asterweave:github-task read owner/repository 123
 /asterweave:deliver owner/repository#123
 ```
+
+## Repository scaffolding
+
+Run `/asterweave:scaffold` once when adopting a repository, and use `--refresh` when its architecture, tooling, or policy changes. The command reads existing instructions, code, tests, manifests, CI, and representative patterns before proposing anything. It does not assume a framework or architecture.
+
+The scaffold may create or update only evidence-backed repository context:
+
+```text
+CLAUDE.md
+.claude/rules/*.md
+.claude/skills/*/SKILL.md
+.claude/agents/*.md
+.claude/references/*.md
+.claude/asterweave.json
+.claude/asterweave-scaffold.json
+```
+
+Project skills are also the project's slash commands, so Asterweave does not duplicate them in the legacy `.claude/commands/` format. The generator creates only the artifacts the repository justifies: simple repositories should receive a small setup; monorepos and domain-heavy systems may receive scoped rules, references, and specialists.
+
+Before changes, Asterweave shows an audited create/replace plan and asks for approval of its content digest. Apply refuses stale file hashes, symlink/path escape, likely secrets, duplicate skill/agent names, broken links, invalid routes, unsafe quality commands, and unapproved drift. Refresh never deletes stale artifacts automatically.
+
+Repository-specific routing lives in `.claude/asterweave.json`. A stage can preload project skills, select a project agent, and add verified quality-gate commands. Project configuration may tighten Asterweave but cannot disable its approval, testing, runtime verification, independent review, security, evidence, or Git safety gates.
 
 The delivery workflow pauses for explicit approval after challenge and planning. It also confirms final commit, push, and PR details unless invoked with an intentional `--auto-pr` argument. It never merges, self-approves, dismisses reviews, bypasses checks, force-pushes, or deletes branches.
 
@@ -94,6 +133,7 @@ Use individual stages when you do not want the complete workflow:
 
 | Command | Purpose |
 | --- | --- |
+| `/asterweave:scaffold` | Analyze and generate/refresh repository-specific Claude Code context |
 | `/asterweave:analyze` | Read-only repository and impact analysis |
 | `/asterweave:challenge` | Requirements/design challenge (the “grill” phase) |
 | `/asterweave:plan` | Approval-ready implementation DAG |
@@ -144,7 +184,7 @@ Host this directory in a controlled repository, review releases, and pin approve
 ```json
 {
   "extraKnownMarketplaces": {
-    "anjokoi-engineering": {
+    "at-digital-labs": {
       "source": {
         "source": "github",
         "repo": "your-org/asterweave-marketplace"
@@ -152,7 +192,7 @@ Host this directory in a controlled repository, review releases, and pin approve
     }
   },
   "enabledPlugins": {
-    "asterweave@anjokoi-engineering": true
+    "asterweave@at-digital-labs": true
   }
 }
 ```
@@ -161,7 +201,7 @@ Use managed `strictKnownMarketplaces`, permission deny rules, sandboxing, branch
 
 ## Design basis
 
-The design combines a deterministic state graph with bounded local agent loops, isolated specialist contexts, append-only evidence, progressive disclosure, and evaluator/implementer separation. It was informed by the supplied papers *Dive into Claude Code: The Design Space of Today's and Future AI Agent Systems* and *Agentic Coding with Claude Code*, then checked against current primary documentation:
+The design combines deterministic state graphs with bounded local agent loops, isolated specialist contexts, append-only evidence, progressive disclosure, and evaluator/implementer separation. Repository scaffolding follows the same principles: minimal always-loaded context, lazy path rules, on-demand skills/references, evidence-backed specialists, and an independent evaluator before mutation. It was informed by the supplied papers *Dive into Claude Code: The Design Space of Today's and Future AI Agent Systems* and *Agentic Coding with Claude Code*, then checked against current primary documentation:
 
 - [Claude Code plugin reference](https://code.claude.com/docs/en/plugins-reference)
 - [Claude Code skills](https://code.claude.com/docs/en/skills)

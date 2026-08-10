@@ -2,9 +2,6 @@
 name: plan
 description: Produce an approval-ready, repository-grounded implementation DAG with exact boundaries, stack rules, test strategy, risks, rollout, and rollback before any code changes.
 argument-hint: "<goal|issue>"
-context: fork
-agent: asterweave:architect
-background: false
 model: opus
 effort: high
 ---
@@ -13,7 +10,7 @@ effort: high
 
 Plan `$ARGUMENTS` without editing code or changing dependencies.
 
-Read [graph contract](../../references/graph-contract.md), [stack discovery](../../references/stack-discovery.md), [testing policy](../../references/testing.md), and the detected stack-specific references.
+Read [graph contract](../../references/graph-contract.md), [stack discovery](../../references/stack-discovery.md), [testing policy](../../references/testing.md), [repository adapter](../../references/repository-adapter.md), and the detected stack-specific references. Resolve the `plan` route, invoke configured project skills, and delegate to its project agent or `asterweave:architect` when no route exists. Validate its proposal against repository evidence.
 
 Return:
 

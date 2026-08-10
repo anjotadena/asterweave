@@ -2,16 +2,17 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "asterweave",
   "displayName": "Asterweave",
-  "version": "0.1.0",
-  "description": "Graph paths woven into reliable delivery through deterministic orchestration, bounded engineering loops, specialist subagents, stack-aware quality gates, and GitHub issue-to-PR automation.",
+  "version": "0.2.0",
+  "description": "Graph paths woven into reliable delivery through evidence-backed repository scaffolding, deterministic orchestration, bounded engineering loops, specialist subagents, stack-aware quality gates, and GitHub issue-to-PR automation.",
   "author": {
-    "name": "Anjokoi Engineering"
+    "name": "AT Digital Labs"
   },
   "license": "MIT",
   "keywords": [
     "agentic-coding",
     "loop-engineering",
     "graph-engineering",
+    "repository-scaffolding",
     "github",
     "testing",
     "security",

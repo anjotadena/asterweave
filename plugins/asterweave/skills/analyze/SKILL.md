@@ -2,9 +2,6 @@
 name: analyze
 description: Analyze a task and repository without changing files, producing stack, architecture, dependency, blast-radius, baseline, and risk evidence for Asterweave.
 argument-hint: "<goal|issue>"
-context: fork
-agent: asterweave:repo-analyzer
-background: false
 model: sonnet
 effort: high
 ---
@@ -13,13 +10,14 @@ effort: high
 
 Analyze `$ARGUMENTS` read-only.
 
-1. Read repository instructions and [stack discovery](../../references/stack-discovery.md).
-2. Run `node "${CLAUDE_SKILL_DIR}/../../scripts/detect-stack.mjs" .` and verify its signals against manifests, CI, documentation, and code.
-3. Trace the task from entry points through business logic, data boundaries, external contracts, callers, and tests.
-4. Find analogous implementations and record conventions that should be reused.
-5. Inspect Git status and report user changes without modifying them.
-6. Identify affected components, data/API/config/deployment impacts, security boundaries, and likely regressions.
-7. Discover repository-native build/test commands. Run only safe, read-only or baseline checks already supported by the repository.
-8. Return: facts with file references, assumptions, unknowns, blast radius, baseline evidence, risks, and recommended next graph node.
+1. Read repository instructions, [stack discovery](../../references/stack-discovery.md), and [repository adapter](../../references/repository-adapter.md).
+2. Run `node "${CLAUDE_SKILL_DIR}/../../scripts/scaffold-repo.mjs" route analyze --root .`. Invoke configured project skills and delegate to the configured project agent; when no route exists, delegate to `asterweave:repo-analyzer`.
+3. Run `node "${CLAUDE_SKILL_DIR}/../../scripts/detect-stack.mjs" .` and verify its signals against manifests, CI, documentation, and code.
+4. Trace the task from entry points through business logic, data boundaries, external contracts, callers, and tests.
+5. Find analogous implementations and record conventions that should be reused.
+6. Inspect Git status and report user changes without modifying them.
+7. Identify affected components, data/API/config/deployment impacts, security boundaries, and likely regressions.
+8. Discover repository-native build/test commands. Run only safe, read-only or baseline checks already supported by the repository, including configured required quality gates when applicable.
+9. Validate the delegated result against raw repository evidence and return: facts with file references, assumptions, unknowns, blast radius, baseline evidence, risks, and recommended next graph node.
 
 Do not propose implementation details unsupported by repository evidence.

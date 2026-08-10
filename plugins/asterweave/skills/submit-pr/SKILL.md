@@ -9,7 +9,7 @@ effort: high
 
 # Submit a verified pull request
 
-Submit `$ARGUMENTS` under [Git safety](../../references/git-safety.md) and [GitHub workflow](../../references/github-mcp.md).
+Submit `$ARGUMENTS` under [Git safety](../../references/git-safety.md), [GitHub workflow](../../references/github-mcp.md), and [repository adapter](../../references/repository-adapter.md). Resolve the `submit-pr` route and use its project skills/agent when configured; otherwise use `asterweave:pr-engineer`.
 
 1. Require a completed or submit-ready Asterweave state. Run `node "${CLAUDE_SKILL_DIR}/../../scripts/graph-state.mjs" status --compact` and refuse if test, verify, or review gates have not passed.
 2. Inspect status, branch, upstream, remote, base branch, commits, complete diff, generated files, and possible secrets. Preserve unrelated changes and stage only task files.
