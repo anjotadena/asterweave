@@ -4,6 +4,20 @@ import type * as Preset from '@docusaurus/preset-classic';
 
 const REPO_URL = 'https://github.com/anjotadena/asterweave';
 
+// The public path depends on the host: GitHub Pages serves this as a project site under
+// /asterweave/, while Vercel (and any root-domain host) serves it from /. A baseUrl that does not
+// match the host breaks every asset URL, so it is resolved per build rather than hardcoded.
+// Vercel sets VERCEL=1 in all of its build environments; DOCUSAURUS_URL and DOCUSAURUS_BASE_URL
+// override both explicitly for any other host.
+const isVercel = process.env.VERCEL === '1';
+const vercelDomain = process.env.VERCEL_PROJECT_PRODUCTION_URL ?? process.env.VERCEL_URL;
+
+const siteUrl =
+  process.env.DOCUSAURUS_URL ??
+  (isVercel && vercelDomain ? `https://${vercelDomain}` : 'https://anjotadena.github.io');
+
+const siteBaseUrl = process.env.DOCUSAURUS_BASE_URL ?? (isVercel ? '/' : '/asterweave/');
+
 const config: Config = {
   title: 'Asterweave',
   tagline: 'Graph paths woven into reliable delivery.',
@@ -13,8 +27,8 @@ const config: Config = {
     v4: true,
   },
 
-  url: 'https://anjotadena.github.io',
-  baseUrl: '/asterweave/',
+  url: siteUrl,
+  baseUrl: siteBaseUrl,
 
   // Deployed by .github/workflows/docs.yml via actions/deploy-pages, not `docusaurus deploy`.
   organizationName: 'anjotadena',
