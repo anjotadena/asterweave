@@ -40,6 +40,27 @@ User-provided text is quoted as data; it is never interpolated into a shell comm
 
 `.claude/asterweave/state.json` follows [`workflow-state.schema.json`](https://github.com/anjotadena/asterweave/blob/main/plugins/asterweave/schemas/workflow-state.schema.json) in the plugin source.
 
+## Project-completion runs keep their own state
+
+[`/asterweave:complete-project`](/commands/complete-project) coordinates several concurrent workers rather than one linear graph, so it persists a separate run bundle alongside the delivery state, owned exclusively by `scripts/completion-state.mjs`:
+
+```text
+.claude/asterweave/completion/<runId>/
+  state.json             run status, phase, maxWorkers, approvals
+  events.jsonl           append-only history
+  modules.json           module gap inventory
+  dependency-graph.json  modules, shared components, blocking edges
+  waves.json             execution waves and workstream ownership
+  workers/<id>.json      one record per workstream
+  locks.json             shared-code change requests and decisions
+  integration.json       integration-verification results
+  final-audit.json       before/after completion, remaining backlog
+```
+
+`runId`s sort chronologically, so `completion-state.mjs find-active` finds the most recent unfinished run — that's how a completion run resumes instead of spawning duplicate workers. `state.json` follows [`completion-run.schema.json`](https://github.com/anjotadena/asterweave/blob/main/plugins/asterweave/schemas/completion-run.schema.json). The same gitignore guidance above applies.
+
+Each worker also writes a small ownership manifest, `.claude/asterweave/completion-worker.json`, inside **its own worktree** — that file is what the [workstream ownership guard](/hooks/ownership-guard) reads to enforce write boundaries.
+
 ## The Stop hook keeps a workflow moving
 
 Asterweave's `Stop` hook (`hook-stop-gate.mjs`) reads `state.json` on every turn boundary. If a workflow is `active` and not at `done` or paused at `approve`, it injects a reminder telling Claude to continue the current node, record evidence, and transition through `graph-state.mjs` — or, if human input is genuinely required, to record a `needs-human` outcome so the workflow becomes properly `blocked` and the turn can end. See [The Stop hook](/hooks/stop).

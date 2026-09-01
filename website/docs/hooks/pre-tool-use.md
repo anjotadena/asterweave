@@ -43,4 +43,4 @@ A blocked command never runs; Claude receives the denial reason and continues wi
 
 ## Related
 
-[Git and change safety](/repositories/repository-integration#git-and-change-safety), [Stop hook](/hooks/stop).
+Asterweave wires a second, independent `PreToolUse` hook for file-write tools — see [Workstream ownership guard](/hooks/ownership-guard). Also: [Git and change safety](/repositories/repository-integration#git-and-change-safety), [Stop hook](/hooks/stop).

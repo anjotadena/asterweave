@@ -427,7 +427,7 @@ export function runCli(argv = process.argv.slice(2), cwd = process.cwd()) {
   return 0;
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === resolve(new URL(import.meta.url).pathname)) {
+if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
   try {
     process.exitCode = runCli();
   } catch (error) {

@@ -18,6 +18,12 @@ description: The scannable, copy-paste version of everything on this page.
 /asterweave:deliver <id>
 ```
 
+**Finish a half-built repository, module by module**
+
+```text
+/asterweave:complete-project
+```
+
 **Understand a ticket before committing to it**
 
 ```text

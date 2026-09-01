@@ -6,7 +6,11 @@
   "compilerOptions": {
     "baseUrl": ".",
     "ignoreDeprecations": "6.0",
-    "strict": true
+    "strict": true,
+    // Set explicitly rather than inherited: if "@docusaurus/tsconfig" fails to resolve (for
+    // example before `npm ci`), its noEmit is lost and `npm run typecheck` emits JavaScript
+    // beside the sources, which then shadows the .ts/.tsx files and breaks `npm run build`.
+    "noEmit": true
   },
   "exclude": [".docusaurus", "build"]
 }

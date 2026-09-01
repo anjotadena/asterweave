@@ -144,6 +144,7 @@ Run `/asterweave:scaffold` when adopting a repository or when its architecture/t
 | --- | --- |
 | `/asterweave:scaffold` | Align a repository's `.claude/` with evidence-backed context |
 | `/asterweave:deliver <issue>` | Run the full intake → PR graph |
+| `/asterweave:complete-project` | Audit an existing repository and finish its remaining modules with parallel workstreams |
 | `/asterweave:analyze` / `/asterweave:challenge` | Understand and grill a task before planning |
 | `/asterweave:review` | Independent staff **and** security review of a diff |
 | `/asterweave:resume` | Resume durable workflow state |
@@ -156,10 +157,10 @@ Run `/asterweave:scaffold` when adopting a repository or when its architecture/t
 
 ## What's included
 
-- **16 workflow skills** under the `/asterweave:` namespace.
+- **17 workflow skills** under the `/asterweave:` namespace.
 - **13 specialist agents**, least-privilege by design — read-only analyzers/reviewers, write-capable implementers/testers.
 - **GitHub MCP** for issues, PRs, CI checks, and review comments, with an **optional Azure DevOps MCP** for organizations tracking work in Azure Boards instead.
-- **Two deterministic hooks**: a destructive-command guard and an evidence-based stop gate.
+- **Three deterministic hooks**: a destructive-command guard, an evidence-based stop gate, and a per-workstream ownership guard for parallel completion runs.
 - **Progressive stack rule packs**: .NET/ASP.NET Core/WPF/WinForms, Angular/React/React Native/Node/Next/Nest/Electron, PHP/Laravel, WordPress, Python/Django, Flutter, and mobile concerns.
 
 ---

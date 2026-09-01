@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://at-digital-labs.dev/asterweave/completion-run.schema.json",
+  "title": "Asterweave project-completion run",
+  "description": "Documents the state.json shape written by scripts/completion-state.mjs for a /asterweave:complete-project run. modules.json, dependency-graph.json, waves.json, workers/<id>.json, locks.json, integration.json, and final-audit.json are described in references/project-completion.md; this schema covers only the top-level run record.",
+  "type": "object",
+  "required": ["schemaVersion", "runId", "status", "phase", "maxWorkers", "createdAt", "updatedAt"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "runId": { "type": "string", "pattern": "^project-completion-.+" },
+    "goal": { "type": ["string", "null"] },
+    "status": { "enum": ["active", "blocked", "aborted", "completed"] },
+    "phase": {
+      "enum": [
+        "discovery",
+        "gap-analysis",
+        "dependency-analysis",
+        "wave-planning",
+        "awaiting-approval",
+        "implementation",
+        "module-verification",
+        "integration-verification",
+        "report",
+        "done"
+      ]
+    },
+    "maxWorkers": { "type": "integer", "minimum": 1, "maximum": 12 },
+    "currentWave": { "type": "integer", "minimum": 0 },
+    "approvals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["by", "summary", "approvedAt"],
+        "properties": {
+          "by": { "type": "string" },
+          "summary": { "type": "string" },
+          "approvedAt": { "type": "string", "format": "date-time" }
+        }
+      }
+    },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  }
+}

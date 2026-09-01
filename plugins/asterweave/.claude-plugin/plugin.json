@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "asterweave",
   "displayName": "Asterweave",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Graph paths woven into reliable delivery through evidence-backed repository scaffolding, deterministic orchestration, bounded engineering loops, specialist subagents, stack-aware quality gates, and GitHub or Azure DevOps issue-to-PR automation.",
   "author": {
     "name": "AT Digital Labs"

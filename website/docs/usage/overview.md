@@ -44,6 +44,7 @@ It should **not** normally run before every ticket once the repository is alread
 | Check repository alignment without changing anything | [`/asterweave:scaffold --check`](/commands/scaffold) |
 | Understand a ticket before committing to a plan | [`/asterweave:analyze`](/commands/analyze) then [`/asterweave:challenge`](/commands/challenge) |
 | Full end-to-end delivery | [`/asterweave:deliver <id>`](/commands/deliver) |
+| Finish a half-built repository, module by module, in parallel | [`/asterweave:complete-project`](/commands/complete-project) |
 | Review code you (or someone else) wrote manually | [`/asterweave:review`](/commands/review) |
 | Resume interrupted work | [`/asterweave:resume`](/commands/resume) |
 | Triage what to work on today | [`/asterweave:daily`](/commands/daily) |
