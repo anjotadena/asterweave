@@ -1,0 +1,8 @@
+{
+  "label": "Repository Integration",
+  "position": 9,
+  "link": {
+    "type": "generated-index",
+    "description": "How Asterweave scaffolds and reads a repository's .claude/."
+  }
+}

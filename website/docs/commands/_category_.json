@@ -1,0 +1,8 @@
+{
+  "label": "Commands",
+  "position": 5,
+  "link": {
+    "type": "generated-index",
+    "description": "Reference for every /asterweave: skill."
+  }
+}

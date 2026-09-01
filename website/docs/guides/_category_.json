@@ -1,0 +1,8 @@
+{
+  "label": "Stack Guides",
+  "position": 11,
+  "link": {
+    "type": "generated-index",
+    "description": "Stack-specific notes Asterweave applies automatically."
+  }
+}

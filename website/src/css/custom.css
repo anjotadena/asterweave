@@ -1,0 +1,30 @@
+/**
+ * Any CSS included here will be global. The classic template
+ * bundles Infima by default. Infima is a CSS framework designed to
+ * work well for content-centric websites.
+ */
+
+/* Asterweave brand: terracotta primary, drawn from the logo's asterisk color. */
+:root {
+  --ifm-color-primary: #c15f3c;
+  --ifm-color-primary-dark: #ad5636;
+  --ifm-color-primary-darker: #a35133;
+  --ifm-color-primary-darkest: #86422a;
+  --ifm-color-primary-light: #d56842;
+  --ifm-color-primary-lighter: #d86f4b;
+  --ifm-color-primary-lightest: #de8564;
+  --ifm-code-font-size: 95%;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+}
+
+/* For readability concerns, choose a lighter palette in dark mode. */
+[data-theme='dark'] {
+  --ifm-color-primary: #e08a63;
+  --ifm-color-primary-dark: #db7a4d;
+  --ifm-color-primary-darker: #d97244;
+  --ifm-color-primary-darkest: #b95a2f;
+  --ifm-color-primary-light: #e59a79;
+  --ifm-color-primary-lighter: #e7a284;
+  --ifm-color-primary-lightest: #eeb9a2;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+}

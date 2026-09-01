@@ -1,0 +1,41 @@
+---
+id: intro
+slug: /
+sidebar_position: 0
+title: What is Asterweave?
+description: Asterweave is a Claude Code plugin that turns feature and defect delivery into an evidence-driven graph with bounded repair loops.
+hide_title: true
+---
+
+import Homepage from '@site/src/components/Homepage';
+
+<Homepage />
+
+## What is Asterweave?
+
+Asterweave is a [Claude Code](https://code.claude.com/docs) plugin that adapts itself to your repository, then turns feature and defect delivery into an **evidence-driven graph** with bounded repair loops.
+
+Instead of treating Claude as a single freeform coding assistant, Asterweave wraps it in a deterministic delivery process: the model reasons and uses tools inside one graph node at a time, while plain Node.js scripts own workflow state, attempt budgets, evidence records, typed transitions, destructive-command guardrails, and the stop gate. A task is only considered done when acceptance criteria, tests, runtime verification, independent reviews, and pull-request state all have **current, environment-grounded evidence** — not a model's claim that it is done.
+
+Asterweave does not impose Clean Architecture, DDD, CQRS, MVVM, or Redux on your codebase. It discovers and preserves whatever architecture is already there.
+
+## What it actually does
+
+- **Scaffolds repository context.** `/asterweave:scaffold` reads your code, tests, CI, and existing instructions, then proposes (and, after your approval, writes) an evidence-backed `CLAUDE.md`, `.claude/rules/`, project skills/agents, and `.claude/asterweave.json` — never a generic template.
+- **Runs a graph, not a chat.** `/asterweave:deliver` walks a fixed sequence — intake, analyze, challenge, plan, human approval, implement, test, verify, review, submit PR, monitor CI, resolve review comments, update the work item — recorded in `.claude/asterweave/state.json` and an append-only event ledger.
+- **Delegates to specialist agents.** Thirteen narrowly scoped subagents (read-only analyzers and reviewers, write-capable implementers and testers) do the bounded work for each node, with least-privilege tool access enforced per agent.
+- **Talks to your issue tracker and Git host.** A bundled GitHub MCP server (and an optional Azure DevOps MCP server) handles issues/work items, pull requests, CI checks, and review comments — every write is previewed, confirmed, and read back for verification.
+- **Enforces safety deterministically.** A `PreToolUse` hook blocks a known set of destructive shell commands; a `Stop` hook keeps an active workflow moving (or lets the turn end cleanly at approval or a blocked state) instead of silently abandoning it.
+
+## What it is not
+
+- It is **not** a fully autonomous engineer that merges its own work. It pauses for human approval after `challenge`/`plan`, and again before commit/push/PR unless you explicitly pass `--auto-pr`. It never merges, self-approves, dismisses reviews, bypasses required checks, force-pushes, or deletes branches.
+- It is **not** a code generator that ignores your repository's conventions. Repository routing in `.claude/asterweave.json` can specialize or tighten Asterweave's graph, but it cannot disable approval, evidence, testing, verification, review, security, or Git-safety gates.
+- It is **not** a spec-authoring tool by default. Asterweave never generates a `specs/` directory; it only reads and links to one your repository already has, or proposes a single use case for a normal/complex feature under explicit approval.
+
+## Where to go next
+
+- New to Asterweave? Start with [Installation](/getting-started/installation) and [Quick start](/getting-started/quick-start).
+- Already installed? Read [How to use Asterweave](/usage/overview) for the daily workflow.
+- Want the mental model first? Read [Core concepts](/concepts/core-concepts) and [Asterweave vs. the repository](/concepts/plugin-vs-repository).
+- Looking for a specific command or agent? Jump to the [command reference](/commands/overview) or [agent reference](/agents/overview).

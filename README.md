@@ -1,109 +1,72 @@
-# Asterweave
+<p align="center">
+  <img src="website/static/img/asterweave.png" width="120" alt="Asterweave">
+</p>
 
-**Graph paths woven into reliable delivery.**
+<h1 align="center">Asterweave</h1>
 
-Asterweave is a Claude Code plugin that adapts itself to your repository, then turns feature and defect delivery into an evidence-driven graph with bounded repair loops. The model reasons inside a graph node; deterministic Node scripts own state, attempt budgets, evidence, typed transitions, destructive-command guardrails, and the stop gate. A task succeeds only when acceptance criteria, tests, runtime verification, independent reviews, and PR state all have current evidence.
+<p align="center">
+  Agentic software delivery for Claude Code.
+</p>
 
-It does not impose Clean Architecture, DDD, CQRS, MVVM, or Redux. It discovers and preserves the architecture already present.
+<p align="center">
+  <a href="https://anjotadena.github.io/asterweave/"><img alt="Documentation" src="https://img.shields.io/badge/docs-asterweave-c15f3c"></a>
+  <a href="https://github.com/anjotadena/asterweave/actions/workflows/docs.yml"><img alt="Documentation build" src="https://github.com/anjotadena/asterweave/actions/workflows/docs.yml/badge.svg"></a>
+  <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
+</p>
+
+Asterweave understands your repository, coordinates specialized agents, implements a change, verifies it, and drives delivery toward a pull request — pausing for your approval at the decisions that stay yours to make.
+
+It does not impose Clean Architecture, DDD, CQRS, MVVM, or Redux. It discovers and preserves whatever architecture is already there.
 
 ---
 
 ## Quick start
 
 ```text
-1. /plugin marketplace add anjotadena/asterweave-marketplace
-2. /plugin install asterweave@at-digital-labs
-3. /plugin enable asterweave@at-digital-labs      → prompts for your GitHub token
-4. /reload-plugins
-5. /asterweave:doctor                             → confirms hooks, state, stack, MCP
-6. /asterweave:scaffold --dry-run                 → preview repository context
-7. /asterweave:scaffold                           → apply after approving the digest
+/plugin marketplace add anjotadena/asterweave-marketplace
+/plugin install asterweave@at-digital-labs
+/plugin enable asterweave@at-digital-labs      → prompts for your GitHub token
+/reload-plugins
+/asterweave:doctor                             → confirms hooks, state, stack, MCP
 ```
 
-Then deliver work:
+Then, inside a repository:
+
+```text
+/asterweave:scaffold
+```
+
+Reads your code, tests, and CI, then proposes an evidence-backed `CLAUDE.md`, `.claude/rules/`, and `.claude/asterweave.json` for your approval — Asterweave's repository-onboarding step.
 
 ```text
 /asterweave:deliver owner/repository#123
 ```
 
-## Requirements
+Analyzes the issue, plans the change, implements it, tests it, verifies it, runs independent code and security review, and opens a pull request — pausing for your approval after the plan, and again before push/PR unless invoked with `--auto-pr`.
 
-| Requirement | Why |
-| --- | --- |
-| Claude Code 2.1.218+ | Plugin, skill, and hook APIs used here |
-| Node.js 18+ | Deterministic hooks and state scripts |
-| Git | Issue-to-PR delivery |
-| Fine-grained GitHub token | Scoped to the repos and operations you allow |
-| Node.js 20+ (only if using Azure DevOps) | Required by the official Azure DevOps MCP server |
-| Azure DevOps org + PAT (optional) | Only when `provider.workItems: azure-devops` |
-
-The plugin ships **disabled by default**, because enabling it activates hooks and requests sensitive GitHub configuration.
+Full walkthrough: **[Getting started →](https://anjotadena.github.io/asterweave/getting-started/installation)**
 
 ---
 
-## Installation
+## Why Asterweave?
 
-### From GitHub (recommended)
+AI can generate code quickly. Autonomous coding becomes unreliable when requirements are ambiguous, agents don't understand the repository, context is lost between sessions, multiple agents duplicate responsibilities, tests aren't used as gates, external writes are assumed to succeed, pipelines fail after PR creation, or review comments pile up unhandled.
 
-Run inside any Claude Code session:
+> **Asterweave provides capability. The repository provides context. Specifications provide intent. Tests provide proof.**
 
-```text
-/plugin marketplace add anjotadena/asterweave-marketplace
-/plugin install asterweave@at-digital-labs
-/plugin enable asterweave@at-digital-labs
-/reload-plugins
-/asterweave:doctor
-```
-
-Claude Code prompts for the GitHub token on enable and stores it as sensitive plugin configuration. Never place tokens in `.mcp.json`, `.env`, source control, prompts, or issue comments.
-
-### From a local clone
-
-```bash
-git clone https://github.com/anjotadena/asterweave-marketplace
-```
-
-Start Claude Code from the directory *containing* the clone, then:
-
-```text
-/plugin marketplace add ./asterweave-marketplace
-/plugin install asterweave@at-digital-labs
-/plugin enable asterweave@at-digital-labs
-```
-
-### For plugin development
-
-```bash
-claude --plugin-dir ./asterweave-marketplace/plugins/asterweave
-```
-
-### Verify a release before installing
-
-```bash
-npm run check                              # offline structural + behavioral validation
-claude plugin validate ./plugins/asterweave
-```
-
-`npm run check` runs the manifest validator and the full unit suite; it needs no network. The `claude plugin validate` step requires Claude Code on the machine.
+| | |
+| --- | --- |
+| **Asterweave** | Reusable agentic workflow — orchestration, generic agents, verification, retries, PR/pipeline handling |
+| **Repository `.claude/`** | Repository-specific engineering knowledge — rules, domain agents, routing |
+| **`specs/`** (optional) | Business/system intent — requirements, use cases, acceptance criteria |
+| **Tests** | Executable proof, not a formality |
+| **Workflow state** | Durable progress, so a session can be resumed rather than restarted |
 
 ---
 
 ## How it works
 
-Repository setup runs its own guarded graph:
-
-```mermaid
-flowchart LR
-    A[Discover] --> B[Model]
-    B --> C[Propose]
-    C --> D[Independent audit]
-    D --> E{Human approval}
-    E -->|revise| C
-    E -->|approved digest| F[Apply]
-    F --> G[Validate + diff]
-```
-
-Delivery runs the main graph, where every failure routes back to implementation rather than forward:
+Delivery runs a deterministic graph, where every failure routes back to implementation rather than forward:
 
 ```mermaid
 flowchart TD
@@ -128,7 +91,50 @@ flowchart TD
     M --> N[Report]
 ```
 
-The workflow pauses for explicit approval after challenge and planning, and confirms commit, push, and PR details unless invoked with an intentional `--auto-pr`. It never merges, self-approves, dismisses reviews, bypasses checks, force-pushes, or deletes branches. Once submitted, it also polls required CI checks, triages new PR review comments (routing actionable ones back through implementation), and updates the linked work item before reporting.
+It never merges, self-approves, dismisses reviews, bypasses checks, or deletes branches. **[Full architecture →](https://anjotadena.github.io/asterweave/architecture/overview)**
+
+---
+
+## Daily workflow
+
+```text
+/asterweave:deliver 4821
+```
+
+Asterweave reads the ticket, loads repository context, plans, implements, tests, reviews, opens the PR, and monitors CI on its own. You review: ambiguous requirements it flags, important architecture decisions in the plan, and the resulting PR. You don't need to invoke every internal agent by hand — the graph decides which checks a change needs.
+
+Run `/asterweave:scaffold` when adopting a repository or when its architecture/tooling changes meaningfully — not before every ticket.
+
+**[Daily workflow guide →](https://anjotadena.github.io/asterweave/usage/daily-workflow)** · **[Cheat sheet →](https://anjotadena.github.io/asterweave/usage/cheat-sheet)**
+
+---
+
+## Asterweave vs. your repository
+
+**Asterweave owns:** reusable orchestration, generic agents, delivery/verification/retry logic, PR and pipeline handling, workflow state.
+**Repository `.claude/` owns:** architecture conventions, project rules, technology conventions, domain-specific agents, routing configuration.
+**`specs/` owns:** requirements, constraints, use cases, acceptance criteria — read and linked by Asterweave, never generated by it.
+
+```text
+┌─────────────────────────────┐
+│ ASTERWEAVE                  │
+│ Reusable capability         │
+│ Skills · Generic agents     │
+│ Orchestration · Workflow    │
+│ state                       │
+└──────────────┬──────────────┘
+               │
+               ▼
+┌─────────────────────────────┐
+│ REPOSITORY                  │
+│ .claude/ · specs/           │
+│ src/ · tests/                │
+└─────────────────────────────┘
+```
+
+> Do not duplicate Asterweave's workflows or generic agents inside a repository's `.claude/`.
+
+**[Asterweave vs. the repository →](https://anjotadena.github.io/asterweave/concepts/plugin-vs-repository)**
 
 ---
 
@@ -136,154 +142,81 @@ The workflow pauses for explicit approval after challenge and planning, and conf
 
 | Command | Purpose |
 | --- | --- |
-| `/asterweave:scaffold` | Analyze and generate/refresh repository-specific Claude Code context |
-| `/asterweave:analyze` | Read-only repository and impact analysis |
-| `/asterweave:challenge` | Requirements/design challenge (the "grill" phase) |
-| `/asterweave:plan` | Approval-ready implementation DAG |
-| `/asterweave:implement` | Execute an approved plan |
-| `/asterweave:test` | Add and run unit and integration/contract tests |
-| `/asterweave:verify` | Verify real observable behavior |
-| `/asterweave:review` | Independent staff and security review |
-| `/asterweave:submit-pr` | Commit, push, and create/update a PR after gates pass |
-| `/asterweave:deliver` | Run the full intake → PR graph |
-| `/asterweave:daily` | Triage and pick up assigned work |
-| `/asterweave:github-task` | `list`, `read`, `create`, `update`, `claim` on GitHub issues |
-| `/asterweave:ado-task` | `list`, `read`, `create`, `update`, `claim` on Azure DevOps work items |
-| `/asterweave:resume` | Resume durable local graph state |
-| `/asterweave:retro` | Improve the workflow from its event ledger |
-| `/asterweave:doctor` | Diagnose plugin, state, hooks, stack, and MCP |
+| `/asterweave:scaffold` | Align a repository's `.claude/` with evidence-backed context |
+| `/asterweave:deliver <issue>` | Run the full intake → PR graph |
+| `/asterweave:analyze` / `/asterweave:challenge` | Understand and grill a task before planning |
+| `/asterweave:review` | Independent staff **and** security review of a diff |
+| `/asterweave:resume` | Resume durable workflow state |
+| `/asterweave:daily` | Triage assigned work, read-only |
+| `/asterweave:doctor` | Diagnose plugin/repository health |
 
-Use the individual stages when you do not want the complete workflow.
+**[Complete command reference →](https://anjotadena.github.io/asterweave/commands/overview)**
 
 ---
 
-## Repository scaffolding
-
-Run `/asterweave:scaffold` once when adopting a repository; use `--refresh` when its architecture, tooling, or policy changes. It reads existing instructions, code, tests, manifests, CI, and representative patterns before proposing anything.
-
-It may create or update only evidence-backed repository context:
-
-```text
-CLAUDE.md
-.claude/rules/*.md
-.claude/skills/*/SKILL.md
-.claude/agents/*.md
-.claude/references/*.md
-.claude/asterweave.json
-.claude/asterweave-scaffold.json
-```
-
-Before writing, Asterweave shows an audited create/replace plan and asks you to approve its content digest. Apply then refuses stale file hashes, symlink/path escape, likely secrets, duplicate skill/agent names, broken links, invalid routes, unsafe quality commands, and unapproved drift. Refresh never deletes stale artifacts automatically.
-
-The generator sizes output to the evidence: simple repositories get a small setup; monorepos and domain-heavy systems may get scoped rules, references, and specialists. Project skills double as the project's slash commands, so it does not duplicate them in the legacy `.claude/commands/` format.
-
-Routing lives in `.claude/asterweave.json`. A stage can preload project skills, select a project agent, and add verified quality-gate commands. Project configuration may tighten Asterweave but **cannot** disable its approval, testing, runtime verification, independent review, security, evidence, or Git safety gates.
-
----
-
-## Specifications
-
-Asterweave never generates a `specs/` directory; it reads and links to one when a repository already keeps requirements, domain vocabulary, or use cases there, and can propose a new or updated use case for a normal/complex feature under explicit approval. See [the specs contract](plugins/asterweave/references/specs.md) for structure, identifiers (`FR-`/`NFR-`/`C-`/`UC-`), and proportional rigor by change size.
-
----
-
-## GitHub token posture
-
-All GitHub content is treated as untrusted data. Every state-changing MCP operation is previewed, confirmed, then read back for verification. The default MCP toolsets are deliberately narrower than `all`, to reduce context and authority.
-
-Recommended fine-grained token:
-
-- limit repository access to selected repositories;
-- grant metadata and contents **read** for context;
-- grant issues and pull requests **write** only if task/PR creation is required;
-- grant Actions, code scanning, and secret scanning **read** only when needed;
-- apply organization approval, expiration, and rotation policies.
-
-## Azure DevOps (optional second provider)
-
-Set `.claude/asterweave.json` `provider.workItems: azure-devops` to route `deliver`, `daily`, and task management through Microsoft's official Azure DevOps MCP server instead of GitHub. It is disabled unless you configure `ado_organization` and a base64-encoded PAT (`ado_pat_base64`) in plugin configuration — see [the Azure DevOps workflow](plugins/asterweave/references/azure-devops-mcp.md) for the exact encoding and its Node 20+ requirement. GitHub configuration remains required by the plugin manifest regardless of which provider you route work items through.
-
----
-
-## Durable state and evidence
-
-```text
-.claude/asterweave/state.json     current typed state
-.claude/asterweave/events.jsonl   append-only history
-```
-
-Add `.claude/asterweave/` to your ignore rules unless your organization intentionally retains sanitized workflow evidence in version control. Never store secrets, raw customer data, or sensitive logs there.
-
-State commands are documented in [`plugins/asterweave/references/graph-contract.md`](plugins/asterweave/references/graph-contract.md). The Stop hook continues an active workflow but lets the turn end at human approval or a typed blocked state; Claude Code's own continuation cap is an additional escape hatch.
-
----
-
-## What is included
+## What's included
 
 - **16 workflow skills** under the `/asterweave:` namespace.
-- **13 specialist agents** — repository analysis, scaffold design/audit, requirements challenge, architecture, implementation, testing, runtime verification, staff review, security review, failure diagnosis, orchestration, and PR/pipeline/work-item handling.
-- **GitHub MCP connection** for issues, PRs, CI checks, code scanning, and secret scanning, with an **optional Azure DevOps MCP connection** for organizations that track work in Azure Boards/Repos instead.
-- **Cross-platform Node scripts** for stack detection, graph state/event history, plugin validation, test discovery, destructive-operation blocking, and evidence-aware continuation.
-- **Progressive stack rule packs** for .NET/ASP.NET Core/WPF/WinForms, Angular/React/React Native/Node/Next/Nest/Electron, PHP/Laravel, WordPress, Python/Django, Flutter, and mobile concerns.
-- **Unit tests** for graph routing, recovery, evidence replacement, stack discovery, scaffolding, and hooks.
-
-Specialist agents have explicit tool allowlists: read-only reviewers cannot edit, and the PR agent cannot edit source. The orchestrator may spawn nested specialists, but descendants cannot widen session permissions. Asterweave parallelizes independent research and independent reviews, and serializes writes by default — parallel writers require separate worktrees/branches, explicit ownership, an integration order, and a final combined test run.
+- **13 specialist agents**, least-privilege by design — read-only analyzers/reviewers, write-capable implementers/testers.
+- **GitHub MCP** for issues, PRs, CI checks, and review comments, with an **optional Azure DevOps MCP** for organizations tracking work in Azure Boards instead.
+- **Two deterministic hooks**: a destructive-command guard and an evidence-based stop gate.
+- **Progressive stack rule packs**: .NET/ASP.NET Core/WPF/WinForms, Angular/React/React Native/Node/Next/Nest/Electron, PHP/Laravel, WordPress, Python/Django, Flutter, and mobile concerns.
 
 ---
 
-## Enterprise rollout
-
-Host this repository under organization control, review releases, and pin approved versions or commit SHAs. Administrators can declare the marketplace and plugin in managed or project settings:
-
-```json
-{
-  "extraKnownMarketplaces": {
-    "at-digital-labs": {
-      "source": {
-        "source": "github",
-        "repo": "anjotadena/asterweave-marketplace"
-      }
-    }
-  },
-  "enabledPlugins": {
-    "asterweave@at-digital-labs": true
-  }
-}
-```
-
-Combine with managed `strictKnownMarketplaces`, permission deny rules, sandboxing, branch protection, required checks, CODEOWNERS, secret scanning, and human review. The plugin hook is not a replacement for platform policy.
-
----
-
-## Repository layout
+## Example
 
 ```text
-.claude-plugin/marketplace.json    marketplace catalog (no version — plugin.json is authoritative)
-plugins/asterweave/               the plugin itself
-  .claude-plugin/plugin.json      authoritative version and user config
-  .mcp.json                       GitHub MCP server, token via ${user_config.github_token}
-  skills/ agents/ hooks/          workflow surface
-  scripts/ schemas/ tests/        deterministic core
-package.json                      npm run check → validate + test
+/asterweave:deliver 4821
 ```
 
-## Migrating from LoopForge
+```text
+ADO-4821 "Prevent duplicate refunds"
+   ↓
+FR-4821-01 / UC-4821-01   (proposed and approved, if specs/ exists)
+   ↓
+Implementation + tests
+   ↓
+Independent code + security review
+   ↓
+Pull Request #391
+```
 
-The rename changes the plugin identity and command namespace. Finish or pause any active LoopForge workflow, disable and uninstall `loopforge@at-digital-labs`, then install Asterweave. Do not keep both enabled — they register equivalent hooks and GitHub MCP behavior.
+Asterweave handles the routine delivery. You remain responsible for ambiguous product decisions, high-risk changes, and final approval under your team's normal governance.
 
-Workflow state is not migrated automatically. To resume unfinished work, first verify `.claude/asterweave/` does not exist, then rename `.claude/loopforge/` to `.claude/asterweave/`. Keep a backup until `/asterweave:doctor` and `/asterweave:resume` confirm the state is valid.
+---
 
-## Design basis
+## Documentation
 
-Deterministic state graphs, bounded local agent loops, isolated specialist contexts, append-only evidence, progressive disclosure, and evaluator/implementer separation. Scaffolding follows the same principles: minimal always-loaded context, lazy path rules, on-demand skills and references, evidence-backed specialists, and an independent evaluator before mutation.
+**[anjotadena.github.io/asterweave →](https://anjotadena.github.io/asterweave/)**
 
-- [Claude Code plugin reference](https://code.claude.com/docs/en/plugins-reference)
-- [Claude Code skills](https://code.claude.com/docs/en/skills)
-- [Claude Code subagents](https://code.claude.com/docs/en/sub-agents)
-- [Claude Code hooks](https://code.claude.com/docs/en/hooks)
-- [Claude Code MCP](https://code.claude.com/docs/en/mcp)
-- [GitHub's official MCP server](https://github.com/github/github-mcp-server)
+Getting started · Using Asterweave day to day · Architecture · Commands · Agents · Rules · Hooks · Repository integration · Specifications · Configuration · Troubleshooting · Contributing.
+
+---
+
+## Requirements
+
+| Requirement | Why |
+| --- | --- |
+| Claude Code 2.1.218+ | Plugin, skill, and hook APIs used here |
+| Node.js 18+ | Deterministic hooks and state scripts |
+| Git | Issue-to-PR delivery |
+| Fine-grained GitHub token | Scoped to the repos and operations you allow |
+| Node.js 20+ (only for Azure DevOps) | Required by the official Azure DevOps MCP server |
+
+The plugin ships **disabled by default** — enabling it activates hooks and requests GitHub configuration. Full details: **[Prerequisites →](https://anjotadena.github.io/asterweave/getting-started/prerequisites)**
+
+---
+
+## Contributing
+
+```bash
+npm install
+npm run check   # validate manifest + run unit tests, offline
+```
+
+See **[Contributing →](https://anjotadena.github.io/asterweave/contributing/development)** for repository layout, testing, and documentation guidelines.
 
 ## License
 
-MIT © AT Digital Labs
+[MIT](./LICENSE) © AT Digital Labs
