@@ -42,6 +42,23 @@
         }
       }
     },
+    "completion": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "parallelism": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxWorkers": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 12
+            }
+          }
+        }
+      }
+    },
     "qualityGates": {
       "type": "object",
       "additionalProperties": false,

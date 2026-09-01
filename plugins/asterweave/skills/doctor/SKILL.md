@@ -1,6 +1,6 @@
 ---
 name: doctor
-description: Diagnose Asterweave installation, Node runtime, plugin manifests, hooks, GitHub MCP connectivity, repository trust, stack detection, and graph-state health without changing source code or remote systems.
+description: Diagnose Asterweave installation, Node runtime, plugin manifests, hooks, GitHub MCP connectivity, repository trust, stack detection, graph-state health, and unfinished project-completion runs without changing source code or remote systems.
 argument-hint: "[--verbose]"
 disable-model-invocation: true
 model: haiku
@@ -16,8 +16,9 @@ Remain read-only except for temporary files outside the repository.
 3. Run `node "${CLAUDE_SKILL_DIR}/../../scripts/detect-stack.mjs" .` and verify detected commands against repository files.
 4. Run `node "${CLAUDE_SKILL_DIR}/../../scripts/scaffold-repo.mjs" verify --root .`; report managed drift, stale artifacts, invalid adapter routes, or missing project skills/agents.
 5. If state exists, run graph status and validation; distinguish a valid blocked workflow from corrupted state.
-6. Inspect `/mcp` or equivalent server status. Confirm the plugin-scoped GitHub server is connected, and the Azure DevOps server too when `provider.workItems: azure-devops` is configured, without displaying tokens, headers, or sensitive configuration.
-7. Confirm hook and scaffold scripts exist and Node 18+ is available. Do not trigger destructive commands to test the guard.
-8. Return a check table with `PASS`, `WARN`, or `FAIL`, exact remediation, and whether `/reload-plugins` is required.
+6. Run `node "${CLAUDE_SKILL_DIR}/../../scripts/completion-state.mjs" find-active`. Report any unfinished project-completion run with its phase and worker statuses (`worker list <runId>`), and cross-check each recorded worker worktree against `node "${CLAUDE_SKILL_DIR}/../../scripts/worktree.mjs" list`; a recorded worktree Git no longer knows about is a `WARN` to resolve before resuming, not a reason to delete anything.
+7. Inspect `/mcp` or equivalent server status. Confirm the plugin-scoped GitHub server is connected, and the Azure DevOps server too when `provider.workItems: azure-devops` is configured, without displaying tokens, headers, or sensitive configuration.
+8. Confirm hook and scaffold scripts, including both PreToolUse guards (destructive-command and workstream ownership) and the Stop gate, exist and Node 18+ is available. Do not trigger destructive commands to test the guard.
+9. Return a check table with `PASS`, `WARN`, or `FAIL`, exact remediation, and whether `/reload-plugins` is required.
 
 Never print secrets or recommend disabling security controls as a fix.

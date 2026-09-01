@@ -37,8 +37,9 @@ None. This is the right first command to run after installing or when something 
 3. Runs `detect-stack.mjs` and verifies detected commands against repository files.
 4. Runs `scaffold-repo.mjs verify` and reports managed drift, stale artifacts, invalid adapter routes, or missing project skills/agents.
 5. If workflow state exists, runs graph status/validation and distinguishes a valid blocked workflow from corrupted state.
-6. Inspects MCP server status, confirming the plugin-scoped GitHub server (and Azure DevOps, if configured) is connected — without displaying tokens, headers, or sensitive configuration.
-7. Confirms hook and scaffold scripts exist and Node 18+ is available, without triggering destructive commands to test the guard.
+6. Reports any unfinished [project-completion run](/commands/complete-project) with its phase and worker statuses, and flags a recorded worker worktree Git no longer knows about.
+7. Inspects MCP server status, confirming the plugin-scoped GitHub server (and Azure DevOps, if configured) is connected — without displaying tokens, headers, or sensitive configuration.
+8. Confirms hook and scaffold scripts exist — both `PreToolUse` guards and the `Stop` gate — and Node 18+ is available, without triggering destructive commands to test the guard.
 
 ## Agents used
 

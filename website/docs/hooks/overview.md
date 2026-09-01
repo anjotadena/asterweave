@@ -1,12 +1,12 @@
 ---
 sidebar_position: 1
 title: Hooks overview
-description: Prompts guide. Hooks enforce. Asterweave's two deterministic hooks.
+description: Prompts guide. Hooks enforce. Asterweave's three deterministic hooks.
 ---
 
 # Hooks
 
-Prompts guide; hooks **enforce**. A hook is a plain Node.js script wired to a Claude Code lifecycle event through `plugins/asterweave/hooks/hooks.json`. Asterweave ships exactly two.
+Prompts guide; hooks **enforce**. A hook is a plain Node.js script wired to a Claude Code lifecycle event through `plugins/asterweave/hooks/hooks.json`. Asterweave ships exactly three.
 
 ```json title="hooks/hooks.json"
 {
@@ -15,6 +15,10 @@ Prompts guide; hooks **enforce**. A hook is a plain Node.js script wired to a Cl
       {
         "matcher": "Bash|PowerShell",
         "hooks": [{"type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hook-guard.mjs\"", "timeout": 10}]
+      },
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [{"type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/completion-guard.mjs\"", "timeout": 10}]
       }
     ],
     "Stop": [
@@ -26,15 +30,16 @@ Prompts guide; hooks **enforce**. A hook is a plain Node.js script wired to a Cl
 }
 ```
 
-:::note Only two hooks exist
+:::note Only these three hooks exist
 Asterweave does not ship a `PostToolUse` or `SessionStart` hook. If a repository needs enforcement at those events, that would be a repository-level addition — see [Repository scaffolding](/repositories/scaffolding#existing-agent-classification) for why Asterweave's scaffolder deliberately avoids proposing hooks by default.
 :::
 
-## The two hooks
+## The three hooks
 
 | Hook | Event | Purpose |
 | --- | --- | --- |
 | [Destructive-command guard](/hooks/pre-tool-use) | `PreToolUse`, matching `Bash`/`PowerShell` | Blocks a fixed list of known high-impact shell commands before they run. |
+| [Workstream ownership guard](/hooks/ownership-guard) | `PreToolUse`, matching `Edit`/`Write`/`NotebookEdit` | Blocks a [`/asterweave:complete-project`](/commands/complete-project) worker from writing outside its assigned module boundary. Inert in every other session. |
 | [Evidence stop gate](/hooks/stop) | `Stop` | Keeps an active Asterweave workflow moving instead of letting the turn end mid-flight. |
 
 ## Defense in depth, not a complete safety system

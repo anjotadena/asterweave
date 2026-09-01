@@ -1,7 +1,7 @@
 ---
 sidebar_position: 1
 title: Command overview
-description: "All sixteen /asterweave: commands, what they do, and when to use each."
+description: "All seventeen /asterweave: commands, what they do, and when to use each."
 ---
 
 # Command overview
@@ -20,6 +20,7 @@ Every Asterweave command is a Claude Code skill under the `/asterweave:` namespa
 | [`/asterweave:review`](/commands/review) | Independent staff and security review | opus / high |
 | [`/asterweave:submit-pr`](/commands/submit-pr) | Commit, push, and create/update a PR after gates pass | sonnet / high |
 | [`/asterweave:deliver`](/commands/deliver) | Run the full intake → PR graph | opus / high |
+| [`/asterweave:complete-project`](/commands/complete-project) | Audit an existing repository and drive its remaining modules to completion with parallel workstreams | opus / high |
 | [`/asterweave:daily`](/commands/daily) | Triage and pick up assigned work | sonnet / medium |
 | [`/asterweave:github-task`](/commands/github-task) | `list`, `read`, `create`, `update`, `claim` on GitHub issues | sonnet / medium |
 | [`/asterweave:ado-task`](/commands/ado-task) | `list`, `read`, `create`, `update`, `claim` on Azure DevOps work items | sonnet / medium |

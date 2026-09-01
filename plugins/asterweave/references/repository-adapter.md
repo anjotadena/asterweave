@@ -6,6 +6,8 @@
 
 Routable stages are `analyze`, `challenge`, `plan`, `implement`, `test`, `verify`, `review`, `submit-pr`, `monitor-pipeline`, `resolve-review-comments`, and `update-work-item`. `intake` and `approve` are never routable — they are always Asterweave-owned.
 
+`completion.parallelism.maxWorkers` (optional, 1-12, default 3) bounds how many `/asterweave:complete-project` module workers may be active at once in this repository. It never raises the number of independent, parallel-safe workstreams the dependency graph actually found — see [project completion](project-completion.md).
+
 ```json
 {
   "version": 1,
