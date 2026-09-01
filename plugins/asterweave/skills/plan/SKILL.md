@@ -10,11 +10,11 @@ effort: high
 
 Plan `$ARGUMENTS` without editing code or changing dependencies.
 
-Read [graph contract](../../references/graph-contract.md), [stack discovery](../../references/stack-discovery.md), [testing policy](../../references/testing.md), [repository adapter](../../references/repository-adapter.md), and the detected stack-specific references. Resolve the `plan` route, invoke configured project skills, and delegate to its project agent or `asterweave:architect` when no route exists. Validate its proposal against repository evidence.
+Read [graph contract](../../references/graph-contract.md), [stack discovery](../../references/stack-discovery.md), [testing policy](../../references/testing.md), [repository adapter](../../references/repository-adapter.md), the context manifest when present, and the detected stack-specific references. Resolve the `plan` route, invoke configured project skills, and delegate to its project agent or `asterweave:architect` when no route exists. Validate its proposal against repository evidence.
 
 Return:
 
-1. objective, acceptance criteria, constraints, and non-goals;
+1. objective, acceptance criteria, constraints, non-goals, and applicable `FR-`/`UC-` identifiers when [project specifications](../../references/specs.md) exist;
 2. evidence-backed current design and patterns to reuse;
 3. ordered change DAG with independent nodes explicitly marked parallel-safe;
 4. exact modules/interfaces/data/configuration affected;

@@ -2,8 +2,8 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "asterweave",
   "displayName": "Asterweave",
-  "version": "0.2.1",
-  "description": "Graph paths woven into reliable delivery through evidence-backed repository scaffolding, deterministic orchestration, bounded engineering loops, specialist subagents, stack-aware quality gates, and GitHub issue-to-PR automation.",
+  "version": "0.3.0",
+  "description": "Graph paths woven into reliable delivery through evidence-backed repository scaffolding, deterministic orchestration, bounded engineering loops, specialist subagents, stack-aware quality gates, and GitHub or Azure DevOps issue-to-PR automation.",
   "author": {
     "name": "AT Digital Labs"
   },
@@ -14,6 +14,7 @@
     "graph-engineering",
     "repository-scaffolding",
     "github",
+    "azure-devops",
     "testing",
     "security",
     "enterprise"
@@ -26,6 +27,20 @@
       "description": "Fine-grained GitHub token with access only to repositories and operations you want Asterweave to use.",
       "sensitive": true,
       "required": true
+    },
+    "ado_organization": {
+      "type": "string",
+      "title": "Azure DevOps organization",
+      "description": "Optional. Azure DevOps organization name, only needed when a repository sets provider.workItems: azure-devops in .claude/asterweave.json.",
+      "sensitive": false,
+      "required": false
+    },
+    "ado_pat_base64": {
+      "type": "string",
+      "title": "Azure DevOps PAT (base64)",
+      "description": "Optional. Base64 of \"<email>:<personal-access-token>\" for Azure DevOps, as required by the official Azure DevOps MCP server. Leave unset unless using Azure DevOps.",
+      "sensitive": true,
+      "required": false
     }
   }
 }

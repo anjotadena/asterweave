@@ -11,7 +11,7 @@ effort: high
 
 Implement `$ARGUMENTS` only after the Asterweave `approve` node has passing approval evidence.
 
-1. Re-read the approved scope, repository instructions, relevant implementation, analogous patterns, detected stack rule pack, and [repository adapter](../../references/repository-adapter.md). Resolve the `implement` route, invoke configured project skills, and delegate a bounded assignment to its project agent or `asterweave:implementer` when no route exists.
+1. Re-read the approved scope, repository instructions, relevant implementation, analogous patterns, detected stack rule pack, the [context manifest](../../references/graph-contract.md#context-manifest) when present, and [repository adapter](../../references/repository-adapter.md). Resolve the `implement` route, invoke configured project skills, and delegate a bounded assignment to its project agent or `asterweave:implementer` when no route exists.
 2. Preserve unrelated user changes. Do not stash, reset, clean, bulk restore, or switch away without consent.
 3. Make the smallest cohesive change. Respect architecture boundaries, public contracts, validation, authorization, data integrity, error handling, observability, and accessibility.
 4. Do not introduce a dependency, schema migration, public API break, infrastructure change, generated bulk rewrite, or secret without explicit plan approval.

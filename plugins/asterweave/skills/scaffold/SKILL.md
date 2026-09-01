@@ -1,7 +1,7 @@
 ---
 name: scaffold
 description: Analyze a repository and safely scaffold or refresh its evidence-backed CLAUDE.md, path rules, project skills/commands, specialist agents, references, Asterweave routing, and quality gates through preview, audit, explicit approval, drift protection, and validation.
-argument-hint: "[--refresh] [--dry-run]"
+argument-hint: "[--refresh] [--dry-run|--check]"
 disable-model-invocation: true
 model: opus
 effort: high
@@ -18,7 +18,7 @@ Scaffold `$ARGUMENTS` under [the repository scaffolding contract](../../referenc
 
    `node "${CLAUDE_SKILL_DIR}/../../scripts/scaffold-repo.mjs" inventory --root .`
 
-3. Delegate repository mapping to `asterweave:repo-analyzer`. Read existing repository instructions, manifests, CI, representative production/test code, architecture boundaries, security/data concerns, and repository-native commands.
+3. Delegate repository mapping to `asterweave:repo-analyzer`. Read existing repository instructions, manifests, CI, representative production/test code, architecture boundaries, security/data concerns, repository-native commands, and any existing `specs/` directory. Classify existing `.claude/agents/*.md` and repository hook configuration as described in [existing agent and hook classification](../../references/repository-scaffolding.md#existing-agent-and-hook-classification).
 4. Classify every proposed fact as verified repository fact, explicit inference, unresolved question, or unsafe/stale practice. Do not turn an inference into a rule.
 
 ## Design the minimum scaffold
@@ -42,7 +42,7 @@ Scaffold `$ARGUMENTS` under [the repository scaffolding contract](../../referenc
    `node "${CLAUDE_SKILL_DIR}/../../scripts/scaffold-repo.mjs" plan ".claude/asterweave/scaffold-proposal.json" --root .`
 
 2. Fix validation errors in the proposal. Delegate an independent review to `asterweave:scaffold-auditor`; require evidence accuracy, minimal context, no duplication, least-privilege agents, valid path globs, valid local links, and safe commands.
-3. If `$ARGUMENTS` contains `--dry-run`, return the audited proposal, operations, warnings, and approval digest without applying it.
+3. If `$ARGUMENTS` contains `--dry-run` or `--check`, return the audited proposal, operations, warnings, and approval digest without applying it.
 4. Otherwise show a compact table of every create/replace operation, rationale, evidence, conflicts, assumptions, and warnings. Obtain explicit approval of the exact returned digest before applying.
 
 ## Apply and verify

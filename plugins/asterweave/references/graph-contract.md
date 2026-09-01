@@ -6,14 +6,16 @@
 - Node contracts
 - Typed edges and recovery
 - State commands
+- Context manifest
 - Convergence and termination
+- Traceability
 - Parallelism and delegation
 
 ## Control model
 
 Use a deterministic delivery graph around Claude's ordinary gather-act-verify loop:
 
-`intake -> analyze -> challenge -> plan -> approve -> implement -> test -> verify -> review -> submit-pr -> done`
+`intake -> analyze -> challenge -> plan -> approve -> implement -> test -> verify -> review -> submit-pr -> monitor-pipeline -> resolve-review-comments -> update-work-item -> done`
 
 The graph owns routing, attempt budgets, approvals, and evidence. Claude reasons and uses tools inside one node at a time. A narrative claim never changes graph state.
 
@@ -33,13 +35,16 @@ State lives at `.claude/asterweave/state.json`. An append-only audit ledger live
 | `verify` | `acceptance`: criteria-to-runtime evidence | 2 | Read-only except ephemeral test data |
 | `review` | `code-review`, `security-review`: independent verdicts | 2 | Read-only |
 | `submit-pr` | `pull-request`: URL, SHA, base/head, checks | 2 | Confirmed commit/push/PR only |
+| `monitor-pipeline` | `pipeline`: CI run reference and conclusion per required check | 3 | Read-only polling |
+| `resolve-review-comments` | `review-comments`: each comment triaged and addressed or replied to | 3 | Confirmed replies only; code fixes loop back through `implement` |
+| `update-work-item` | `work-item-update`: verified provider state after write | 2 | Confirmed provider write only |
 
-Record a required category as non-applicable only with evidence explaining why and which alternative verification covers the risk.
+Record a required category as non-applicable only with evidence explaining why and which alternative verification covers the risk. `resolve-review-comments` may record `info` when a fresh read finds no outstanding comments.
 
 ## Typed edges and recovery
 
 - `pass`: advance to the next node only when required evidence exists and its latest result is not failing.
-- `fail-retryable`: use a new hypothesis. Failures from test/verify/review route back to implement; other nodes retry locally.
+- `fail-retryable`: use a new hypothesis. Failures from test/verify/review/monitor-pipeline/resolve-review-comments route back to implement, which invalidates and re-runs test, verify, review, submit-pr, and monitor-pipeline for the new change; other nodes retry locally.
 - `fail-replan`: route to plan because repository facts or constraints invalidated the approved design.
 - `blocked` or `needs-human`: pause without consuming retries until the blocker is resolved.
 - `policy-denied`: pause; choose a safer design or request authorized human action. Never weaken policy.
@@ -67,6 +72,12 @@ node "<plugin>/scripts/graph-state.mjs" validate
 
 Quote user-provided text as data; never interpolate it into a shell command without safe argument handling.
 
+## Context manifest
+
+When `analyze` passes, write the bounded facts downstream nodes need to `.claude/asterweave/context-manifest.json` (schema: [`context-manifest.schema.json`](../schemas/context-manifest.schema.json)) and reference its path from the `repository` evidence entry. It holds only: the task/source reference, applicable `.claude/rules/*.md` and repository instructions, applicable spec files, representative implementation/test files, and affected paths — facts already gathered during `analyze`, not new research.
+
+`challenge`, `plan`, `implement`, `test`, `verify`, and `review` should read this manifest first instead of re-scanning the whole repository, and only expand beyond it when it does not cover what the current node needs or looks stale against the current diff. The manifest is workflow state, not a committed artifact; it lives under the existing gitignorable `.claude/asterweave/` directory and is superseded by the next `analyze` pass.
+
 ## Convergence and termination
 
 Do not treat “the model stopped calling tools” as success. Finish only when:
@@ -75,8 +86,14 @@ Do not treat “the model stopped calling tools” as success. Finish only when:
 - every acceptance criterion links to current passing evidence;
 - required build/static/unit/integration/runtime checks pass;
 - no unresolved Critical/High review or security finding remains;
-- approval and GitHub identifiers exist;
-- the current diff matches the evidence revision.
+- approval and pull-request identifiers exist;
+- the current diff matches the evidence revision;
+- required CI checks conclude successfully and outstanding PR review comments are addressed or replied to;
+- the source work item (when a provider is configured) reflects the final state.
+
+## Traceability
+
+Where a spec exists (see [specs](specs.md)), evidence should stay linkable back to it: `work item -> requirement/use case -> acceptance criteria -> change evidence -> tests -> pull request`. Use the identifiers already present in the task and spec (`FR-###`, `UC-###`, issue/work-item number) inside evidence summaries and the PR body instead of inventing new tracking fields. Do not add traceability comments to source code merely to satisfy this; the evidence ledger and PR body are the record.
 
 Bound retries by the node budget. Within an attempt, bound tool/turn/time use proportionally to the task. After a repeated signature, call `failure-analyst` or ask for human direction.
 

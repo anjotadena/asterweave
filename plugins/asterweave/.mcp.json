@@ -7,6 +7,14 @@
         "Authorization": "Bearer ${user_config.github_token}",
         "X-MCP-Toolsets": "default,actions,code_security,secret_protection"
       }
+    },
+    "azuredevops": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@azure-devops/mcp", "${user_config.ado_organization}", "--authentication", "pat"],
+      "env": {
+        "PERSONAL_ACCESS_TOKEN": "${user_config.ado_pat_base64}"
+      }
     }
   }
 }

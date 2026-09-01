@@ -9,10 +9,19 @@
     "version": {
       "const": 1
     },
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "workItems": {
+          "enum": ["github", "azure-devops", "none"]
+        }
+      }
+    },
     "routing": {
       "type": "object",
       "propertyNames": {
-        "enum": ["analyze", "challenge", "plan", "implement", "test", "verify", "review", "submit-pr"]
+        "enum": ["analyze", "challenge", "plan", "implement", "test", "verify", "review", "submit-pr", "monitor-pipeline", "resolve-review-comments", "update-work-item"]
       },
       "additionalProperties": {
         "type": "object",

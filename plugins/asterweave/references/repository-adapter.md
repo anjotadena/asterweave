@@ -2,9 +2,16 @@
 
 `.claude/asterweave.json` connects Asterweave's reusable graph to project-specific skills, agents, and quality gates. It follows [the repository adapter schema](../schemas/repository-adapter.schema.json).
 
+`provider.workItems` selects which work-item/PR system `deliver`, `daily`, and the task skills use: `github` (default when unset), `azure-devops`, or `none` for local-only workflows without an external tracker. Setting it does not change delivery gates — it only selects the MCP connection and task skill used for intake, PR handling, and the `update-work-item` node.
+
+Routable stages are `analyze`, `challenge`, `plan`, `implement`, `test`, `verify`, `review`, `submit-pr`, `monitor-pipeline`, `resolve-review-comments`, and `update-work-item`. `intake` and `approve` are never routable — they are always Asterweave-owned.
+
 ```json
 {
   "version": 1,
+  "provider": {
+    "workItems": "github"
+  },
   "routing": {
     "implement": {
       "agent": "payments-implementer",

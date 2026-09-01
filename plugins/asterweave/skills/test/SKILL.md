@@ -8,7 +8,7 @@ effort: high
 
 # Test the change
 
-Test `$ARGUMENTS` under [testing policy](../../references/testing.md), [repository adapter](../../references/repository-adapter.md), and the detected stack rule pack. Resolve the `test` route, invoke configured project skills, and delegate to its project agent or `asterweave:test-engineer` when no route exists.
+Test `$ARGUMENTS` under [testing policy](../../references/testing.md), [repository adapter](../../references/repository-adapter.md), the detected stack rule pack, and the [context manifest](../../references/graph-contract.md#context-manifest) when present. Resolve the `test` route, invoke configured project skills, and delegate to its project agent or `asterweave:test-engineer` when no route exists.
 
 1. Map changed behavior and acceptance criteria to tests before writing more tests.
 2. Inspect existing test organization, fixtures, builders, mocks, naming, and CI commands.

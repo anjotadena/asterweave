@@ -23,6 +23,9 @@ export const NODE_ORDER = [
   "verify",
   "review",
   "submit-pr",
+  "monitor-pipeline",
+  "resolve-review-comments",
+  "update-work-item",
 ];
 
 export const NODE_CONTRACTS = {
@@ -36,6 +39,9 @@ export const NODE_CONTRACTS = {
   verify: { maxAttempts: 2, evidence: ["acceptance"] },
   review: { maxAttempts: 2, evidence: ["code-review", "security-review"] },
   "submit-pr": { maxAttempts: 2, evidence: ["pull-request"] },
+  "monitor-pipeline": { maxAttempts: 3, evidence: ["pipeline"] },
+  "resolve-review-comments": { maxAttempts: 3, evidence: ["review-comments"] },
+  "update-work-item": { maxAttempts: 2, evidence: ["work-item-update"] },
 };
 
 const OUTCOMES = new Set([
@@ -235,7 +241,7 @@ function nextNode(node) {
 function routeFailure(node, outcome) {
   if (outcome === "fail-replan") return "plan";
   if (outcome === "security-escalation") return "review";
-  if (["test", "verify", "review"].includes(node)) return "implement";
+  if (["test", "verify", "review", "monitor-pipeline", "resolve-review-comments"].includes(node)) return "implement";
   return node;
 }
 

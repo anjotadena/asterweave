@@ -10,7 +10,7 @@ effort: high
 
 Verify `$ARGUMENTS` independently from implementation.
 
-1. Read the approved acceptance criteria, [evidence contract](../../references/evidence-contract.md), and [repository adapter](../../references/repository-adapter.md). Resolve the `verify` route, invoke configured project skills, and delegate to its project agent or `asterweave:verification-engineer` when no route exists.
+1. Read the approved acceptance criteria, [evidence contract](../../references/evidence-contract.md), the [context manifest](../../references/graph-contract.md#context-manifest) when present, and [repository adapter](../../references/repository-adapter.md). Resolve the `verify` route, invoke configured project skills, and delegate to its project agent or `asterweave:verification-engineer` when no route exists.
 2. Build and launch the application with repository-native commands and required local dependencies.
 3. Exercise the affected behavior through its real boundary: browser, API, CLI, worker, mobile simulator/device, desktop process, database, or integration harness.
 4. Cover happy path, failure path, permissions, persistence, compatibility, and user-visible states proportional to risk.

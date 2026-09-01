@@ -33,6 +33,9 @@ const ALLOWED_STAGES = new Set([
   "verify",
   "review",
   "submit-pr",
+  "monitor-pipeline",
+  "resolve-review-comments",
+  "update-work-item",
 ]);
 const ALLOWED_KINDS = new Set(["instructions", "rule", "skill", "agent", "reference", "adapter"]);
 const EXCLUDED_DIRECTORIES = new Set([
@@ -266,8 +269,18 @@ function validateAdapterObject(adapter, root, plannedPaths = new Set()) {
   const errors = [];
   const warnings = [];
   if (!adapter || typeof adapter !== "object" || Array.isArray(adapter)) return { errors: ["adapter: must be a JSON object"], warnings };
-  for (const field of Object.keys(adapter)) if (!["version", "routing", "qualityGates"].includes(field)) errors.push(`adapter: unsupported field ${field}`);
+  for (const field of Object.keys(adapter)) if (!["version", "provider", "routing", "qualityGates"].includes(field)) errors.push(`adapter: unsupported field ${field}`);
   if (adapter.version !== 1) errors.push("adapter: version must be 1");
+  if (adapter.provider !== undefined) {
+    if (!adapter.provider || typeof adapter.provider !== "object" || Array.isArray(adapter.provider)) {
+      errors.push("adapter: provider must be an object");
+    } else {
+      for (const field of Object.keys(adapter.provider)) if (field !== "workItems") errors.push(`adapter: provider has unsupported field ${field}`);
+      if (adapter.provider.workItems !== undefined && !["github", "azure-devops", "none"].includes(adapter.provider.workItems)) {
+        errors.push("adapter: provider.workItems must be github, azure-devops, or none");
+      }
+    }
+  }
   if (adapter.routing !== undefined && (typeof adapter.routing !== "object" || Array.isArray(adapter.routing))) {
     errors.push("adapter: routing must be an object");
   }

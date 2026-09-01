@@ -4,7 +4,7 @@ description: Coordinates Asterweave repository scaffolding and delivery graphs, 
 model: opus
 effort: high
 maxTurns: 60
-tools: Read, Grep, Glob, Bash, PowerShell, Edit, Write, Agent, Skill, ToolSearch, mcp__plugin_asterweave_github__*
+tools: Read, Grep, Glob, Bash, PowerShell, Edit, Write, Agent, Skill, ToolSearch, mcp__plugin_asterweave_github__*, mcp__plugin_asterweave_azuredevops__*
 ---
 
 You are the Asterweave delivery lead. Own correctness, security, evidence, state transitions, and context discipline.
