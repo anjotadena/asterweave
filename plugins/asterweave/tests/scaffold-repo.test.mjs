@@ -175,3 +175,32 @@ test("rejects destructive quality gates and missing adapter definitions", () => 
   assert.equal(plan.valid, false);
   assert.ok(plan.errors.some((error) => /destructive/.test(error)));
 });
+
+test("accepts provider and post-PR routing stages, rejects an unsupported provider value", () => {
+  const root = workspace();
+  writeFileSync(join(root, "package.json"), "{}\n");
+  mkdirSync(join(root, ".claude"), { recursive: true });
+  mkdirSync(join(root, ".claude", "agents"), { recursive: true });
+  writeFileSync(
+    join(root, ".claude", "agents", "pipeline-watcher.md"),
+    "---\nname: pipeline-watcher\ndescription: Watches this repository's required pipeline checks.\nmodel: sonnet\ntools: Read, Bash\n---\n\nWatch CI.\n",
+  );
+  writeFileSync(
+    join(root, ".claude", "asterweave.json"),
+    JSON.stringify({
+      version: 1,
+      provider: { workItems: "azure-devops" },
+      routing: { "monitor-pipeline": { agent: "pipeline-watcher" } },
+    }),
+  );
+  const verification = verifyScaffold(root);
+  assert.deepEqual(verification.errors, []);
+  const route = resolveRoute("monitor-pipeline", root);
+  assert.equal(route.route.agent, "pipeline-watcher");
+
+  writeFileSync(
+    join(root, ".claude", "asterweave.json"),
+    JSON.stringify({ version: 1, provider: { workItems: "bitbucket" } }),
+  );
+  assert.ok(verifyScaffold(root).errors.some((error) => /provider.workItems/.test(error)));
+});

@@ -81,6 +81,50 @@ test("new passing evidence supersedes an earlier failure without deleting histor
   assert.equal(state.currentNode, "analyze");
 });
 
+function reachSubmitPr(cwd) {
+  initialize({ goal: "Ship feature", cwd });
+  for (const node of ["intake", "analyze", "challenge", "plan"]) passCurrent(cwd, node);
+  approve({ by: "Anjo", summary: "Approved" }, cwd);
+  for (const node of ["implement", "test", "verify", "review", "submit-pr"]) passCurrent(cwd, node);
+}
+
+test("a failed pipeline check routes back to implement and invalidates the PR", () => {
+  const cwd = workspace();
+  reachSubmitPr(cwd);
+  enterNode("monitor-pipeline", cwd);
+  addEvidence("monitor-pipeline", { kind: "pipeline", summary: "Required check failed", result: "fail" }, cwd);
+  completeNode("monitor-pipeline", "fail-retryable", { signature: "ci:lint-failed" }, cwd);
+  const state = loadState(cwd);
+  assert.equal(state.currentNode, "implement");
+  assert.equal(state.nodes["monitor-pipeline"].status, "pending");
+  assert.equal(state.nodes["submit-pr"].status, "pending");
+});
+
+test("an actionable review comment routes back to implement", () => {
+  const cwd = workspace();
+  reachSubmitPr(cwd);
+  passCurrent(cwd, "monitor-pipeline");
+  enterNode("resolve-review-comments", cwd);
+  addEvidence("resolve-review-comments", { kind: "review-comments", summary: "One actionable comment", result: "fail" }, cwd);
+  completeNode("resolve-review-comments", "fail-retryable", { signature: "review:rename-variable" }, cwd);
+  const state = loadState(cwd);
+  assert.equal(state.currentNode, "implement");
+  assert.equal(state.nodes["monitor-pipeline"].status, "pending");
+});
+
+test("a work-item update failure retries locally instead of reopening implementation", () => {
+  const cwd = workspace();
+  reachSubmitPr(cwd);
+  passCurrent(cwd, "monitor-pipeline");
+  passCurrent(cwd, "resolve-review-comments");
+  enterNode("update-work-item", cwd);
+  addEvidence("update-work-item", { kind: "work-item-update", summary: "Transient API error", result: "fail" }, cwd);
+  completeNode("update-work-item", "fail-retryable", { signature: "ado:timeout" }, cwd);
+  const state = loadState(cwd);
+  assert.equal(state.currentNode, "update-work-item");
+  assert.equal(state.nodes["submit-pr"].status, "passed");
+});
+
 test("stable repeated failure blocks the workflow", () => {
   const cwd = workspace();
   initialize({ goal: "Investigate", cwd });

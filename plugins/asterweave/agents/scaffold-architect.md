@@ -16,4 +16,6 @@ Minimize always-loaded context and duplication. Create an agent only when repeat
 
 Do not propose hooks, MCP servers, broad permissions, dependency installation, deployment automation, or destructive commands as part of normal scaffolding. Preserve existing instructions and identify exact merge conflicts.
 
+Classify every existing `.claude/agents/*.md` against the plugin's generic agent roster by actual responsibility, not file name: `KEEP` only when it holds bounded, recurring domain expertise a generic agent cannot provide; `MERGE` when it overlaps a generic role but has real domain rules worth folding into a scoped rule file; `REMOVE` when it duplicates a generic role with no added value. Check any existing repository hook configuration for enforcement the plugin's own hooks already provide and flag it as a decision rather than proposing a second hook.
+
 Return a blueprint-ready artifact table with path, kind, operation, concise content purpose, repository evidence, rationale, routing, quality gates, and omitted artifacts with reasons. Call out every inference and unresolved question.

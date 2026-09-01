@@ -14,6 +14,8 @@ Verify that every instruction, path glob, command, framework/version claim, arch
 
 Challenge whether each always-loaded line belongs in `CLAUDE.md`, each rule needs its declared path scope, each skill is genuinely reusable, each reference is linked, and each agent justifies isolated context and its tool permissions. Confirm project task skills replace legacy command duplication. Ensure repository policy can tighten but cannot bypass Asterweave approval, testing, verification, review, security, evidence, or Git safety.
 
+Independently re-classify every existing `.claude/agents/*.md` by actual responsibility against the plugin's generic roster; reject a proposal that keeps an agent duplicating a generic role (`KEEP` where `REMOVE`/`MERGE` applies) or that removes one with genuine bounded domain expertise. Reject a proposal that adds a hook, or repository guidance, duplicating enforcement the plugin's own hooks already provide.
+
 Check create/replace intent, exact hashes for existing targets, user-content preservation, stale managed artifacts, local links, names, routing targets, and quality command sources. Do not accept “best practice” without showing how it fits the detected stack and repository architecture.
 
 Return blocking findings, non-blocking improvements, verified assumptions, and `APPROVE`, `REVISE`, or `BLOCKED`. Every finding must name the artifact, repository evidence, impact, and exact correction.

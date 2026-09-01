@@ -10,7 +10,7 @@ effort: high
 
 Review `$ARGUMENTS` after implementation and verification.
 
-1. Read complete touched files, diff, tests, acceptance evidence, downstream consumers of changed interfaces, and [repository adapter](../../references/repository-adapter.md). Resolve the `review` route, invoke configured project skills, and delegate the staff pass to its project agent or `asterweave:staff-reviewer` when no route exists.
+1. Read complete touched files, diff, tests, acceptance evidence, downstream consumers of changed interfaces, the [context manifest](../../references/graph-contract.md#context-manifest) when present, and [repository adapter](../../references/repository-adapter.md). Resolve the `review` route, invoke configured project skills, and delegate the staff pass to its project agent or `asterweave:staff-reviewer` when no route exists.
 2. Check correctness, architecture boundaries, authorization, security, data integrity, concurrency, error behavior, backward compatibility, performance, accessibility, observability, migrations, and maintainability.
 3. Validate test quality and identify behavior not covered by unit/integration/runtime evidence.
 4. Delegate a separate pass to `asterweave:security-reviewer`; do not leak your expected findings.

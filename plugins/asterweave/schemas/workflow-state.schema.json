@@ -12,7 +12,7 @@
     "source": { "type": ["string", "null"] },
     "status": { "enum": ["active", "blocked", "aborted", "completed"] },
     "currentNode": {
-      "enum": ["intake", "analyze", "challenge", "plan", "approve", "implement", "test", "verify", "review", "submit-pr", "done"]
+      "enum": ["intake", "analyze", "challenge", "plan", "approve", "implement", "test", "verify", "review", "submit-pr", "monitor-pipeline", "resolve-review-comments", "update-work-item", "done"]
     },
     "nodes": {
       "type": "object",

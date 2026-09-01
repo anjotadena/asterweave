@@ -30,6 +30,9 @@ Never record tokens, credentials, PII, production data, raw sensitive logs, or u
 | Review passes | independent complete-diff/consumer review with verdict |
 | Security passes | trust-boundary review and relevant scan/test results |
 | PR submitted | verified URL/number, base/head, head SHA, initial check state |
+| Pipeline concluded | each required check's name, conclusion, and run reference, read from the provider for the submitted head SHA |
+| Review comments resolved | each outstanding comment triaged, with its resolution: the change reference that addresses it or the confirmed reply posted |
+| Work item updated | provider read-back showing the work item's final state and its link to the pull request |
 
 ## Freshness
 

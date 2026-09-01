@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://at-digital-labs.dev/asterweave/context-manifest.schema.json",
+  "title": "Asterweave context manifest",
+  "description": "Bounded repository context produced by the analyze node and reused by downstream graph nodes instead of re-scanning the repository. Transient workflow state, not a committed artifact.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["task", "generatedAt"],
+  "properties": {
+    "task": { "type": "string", "minLength": 1 },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "rules": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Repository-relative paths to CLAUDE.md, .claude/rules/*.md, or other instructions applicable to this task."
+    },
+    "specs": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Repository-relative paths to specs/** documents applicable to this task, when specs exist."
+    },
+    "representativeFiles": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Existing implementations whose patterns should be reused."
+    },
+    "tests": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Existing tests covering the affected behavior."
+    },
+    "affectedPaths": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Modules/directories the change is expected to touch."
+    },
+    "notes": { "type": "string" }
+  }
+}

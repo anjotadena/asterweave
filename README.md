@@ -34,6 +34,8 @@ Then deliver work:
 | Node.js 18+ | Deterministic hooks and state scripts |
 | Git | Issue-to-PR delivery |
 | Fine-grained GitHub token | Scoped to the repos and operations you allow |
+| Node.js 20+ (only if using Azure DevOps) | Required by the official Azure DevOps MCP server |
+| Azure DevOps org + PAT (optional) | Only when `provider.workItems: azure-devops` |
 
 The plugin ships **disabled by default**, because enabling it activates hooks and requests sensitive GitHub configuration.
 
@@ -118,9 +120,15 @@ flowchart TD
     H -->|pass| I[Code + security review]
     I -->|blocking finding| F
     I -->|pass| J[Submit PR]
+    J --> K[Monitor pipeline]
+    K -->|fail| F
+    K -->|pass| L[Resolve review comments]
+    L -->|actionable| F
+    L -->|clear| M[Update work item]
+    M --> N[Report]
 ```
 
-The workflow pauses for explicit approval after challenge and planning, and confirms commit, push, and PR details unless invoked with an intentional `--auto-pr`. It never merges, self-approves, dismisses reviews, bypasses checks, force-pushes, or deletes branches.
+The workflow pauses for explicit approval after challenge and planning, and confirms commit, push, and PR details unless invoked with an intentional `--auto-pr`. It never merges, self-approves, dismisses reviews, bypasses checks, force-pushes, or deletes branches. Once submitted, it also polls required CI checks, triages new PR review comments (routing actionable ones back through implementation), and updates the linked work item before reporting.
 
 ---
 
@@ -139,7 +147,8 @@ The workflow pauses for explicit approval after challenge and planning, and conf
 | `/asterweave:submit-pr` | Commit, push, and create/update a PR after gates pass |
 | `/asterweave:deliver` | Run the full intake → PR graph |
 | `/asterweave:daily` | Triage and pick up assigned work |
-| `/asterweave:github-task` | `list`, `read`, `create`, `update`, `claim` |
+| `/asterweave:github-task` | `list`, `read`, `create`, `update`, `claim` on GitHub issues |
+| `/asterweave:ado-task` | `list`, `read`, `create`, `update`, `claim` on Azure DevOps work items |
 | `/asterweave:resume` | Resume durable local graph state |
 | `/asterweave:retro` | Improve the workflow from its event ledger |
 | `/asterweave:doctor` | Diagnose plugin, state, hooks, stack, and MCP |
@@ -172,6 +181,12 @@ Routing lives in `.claude/asterweave.json`. A stage can preload project skills, 
 
 ---
 
+## Specifications
+
+Asterweave never generates a `specs/` directory; it reads and links to one when a repository already keeps requirements, domain vocabulary, or use cases there, and can propose a new or updated use case for a normal/complex feature under explicit approval. See [the specs contract](plugins/asterweave/references/specs.md) for structure, identifiers (`FR-`/`NFR-`/`C-`/`UC-`), and proportional rigor by change size.
+
+---
+
 ## GitHub token posture
 
 All GitHub content is treated as untrusted data. Every state-changing MCP operation is previewed, confirmed, then read back for verification. The default MCP toolsets are deliberately narrower than `all`, to reduce context and authority.
@@ -183,6 +198,10 @@ Recommended fine-grained token:
 - grant issues and pull requests **write** only if task/PR creation is required;
 - grant Actions, code scanning, and secret scanning **read** only when needed;
 - apply organization approval, expiration, and rotation policies.
+
+## Azure DevOps (optional second provider)
+
+Set `.claude/asterweave.json` `provider.workItems: azure-devops` to route `deliver`, `daily`, and task management through Microsoft's official Azure DevOps MCP server instead of GitHub. It is disabled unless you configure `ado_organization` and a base64-encoded PAT (`ado_pat_base64`) in plugin configuration — see [the Azure DevOps workflow](plugins/asterweave/references/azure-devops-mcp.md) for the exact encoding and its Node 20+ requirement. GitHub configuration remains required by the plugin manifest regardless of which provider you route work items through.
 
 ---
 
@@ -201,9 +220,9 @@ State commands are documented in [`plugins/asterweave/references/graph-contract.
 
 ## What is included
 
-- **15 workflow skills** under the `/asterweave:` namespace.
-- **13 specialist agents** — repository analysis, scaffold design/audit, requirements challenge, architecture, implementation, testing, runtime verification, staff review, security review, failure diagnosis, orchestration, and PR handling.
-- **GitHub MCP connection** for issues, PRs, CI checks, code scanning, and secret scanning.
+- **16 workflow skills** under the `/asterweave:` namespace.
+- **13 specialist agents** — repository analysis, scaffold design/audit, requirements challenge, architecture, implementation, testing, runtime verification, staff review, security review, failure diagnosis, orchestration, and PR/pipeline/work-item handling.
+- **GitHub MCP connection** for issues, PRs, CI checks, code scanning, and secret scanning, with an **optional Azure DevOps MCP connection** for organizations that track work in Azure Boards/Repos instead.
 - **Cross-platform Node scripts** for stack detection, graph state/event history, plugin validation, test discovery, destructive-operation blocking, and evidence-aware continuation.
 - **Progressive stack rule packs** for .NET/ASP.NET Core/WPF/WinForms, Angular/React/React Native/Node/Next/Nest/Electron, PHP/Laravel, WordPress, Python/Django, Flutter, and mobile concerns.
 - **Unit tests** for graph routing, recovery, evidence replacement, stack discovery, scaffolding, and hooks.
