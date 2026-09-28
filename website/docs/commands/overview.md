@@ -1,7 +1,7 @@
 ---
 sidebar_position: 1
 title: Command overview
-description: "All seventeen /asterweave: commands, what they do, and when to use each."
+description: "All eighteen /asterweave: commands, what they do, and when to use each."
 ---
 
 # Command overview
@@ -25,6 +25,7 @@ Every Asterweave command is a Claude Code skill under the `/asterweave:` namespa
 | [`/asterweave:github-task`](/commands/github-task) | `list`, `read`, `create`, `update`, `claim` on GitHub issues | sonnet / medium |
 | [`/asterweave:ado-task`](/commands/ado-task) | `list`, `read`, `create`, `update`, `claim` on Azure DevOps work items | sonnet / medium |
 | [`/asterweave:resume`](/commands/resume) | Resume durable local graph state | sonnet / medium |
+| [`/asterweave:handoff`](/commands/handoff) | `create`, `resume`, `status` an evidence-labeled session handoff | sonnet / high |
 | [`/asterweave:retro`](/commands/retro) | Improve the workflow from its event ledger | sonnet / high |
 | [`/asterweave:doctor`](/commands/doctor) | Diagnose plugin, state, hooks, stack, and MCP | haiku / medium |
 

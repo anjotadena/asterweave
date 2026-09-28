@@ -148,6 +148,7 @@ Run `/asterweave:scaffold` when adopting a repository or when its architecture/t
 | `/asterweave:analyze` / `/asterweave:challenge` | Understand and grill a task before planning |
 | `/asterweave:review` | Independent staff **and** security review of a diff |
 | `/asterweave:resume` | Resume durable workflow state |
+| `/asterweave:handoff [create|resume|status]` | Hand a long session's task to a fresh session with an evidence-labeled handoff |
 | `/asterweave:daily` | Triage assigned work, read-only |
 | `/asterweave:doctor` | Diagnose plugin/repository health |
 
@@ -157,10 +158,10 @@ Run `/asterweave:scaffold` when adopting a repository or when its architecture/t
 
 ## What's included
 
-- **17 workflow skills** under the `/asterweave:` namespace.
+- **18 workflow skills** under the `/asterweave:` namespace.
 - **13 specialist agents**, least-privilege by design — read-only analyzers/reviewers, write-capable implementers/testers.
 - **GitHub MCP** for issues, PRs, CI checks, and review comments, with an **optional Azure DevOps MCP** for organizations tracking work in Azure Boards instead.
-- **Three deterministic hooks**: a destructive-command guard, an evidence-based stop gate, and a per-workstream ownership guard for parallel completion runs.
+- **Deterministic hooks**: a destructive-command guard, an evidence-based stop gate, a per-workstream ownership guard for parallel completion runs, and an opt-in context-budget handoff reminder.
 - **Progressive stack rule packs**: .NET/ASP.NET Core/WPF/WinForms, Angular/React/React Native/Node/Next/Nest/Electron, PHP/Laravel, WordPress, Python/Django, Flutter, and mobile concerns.
 
 ---

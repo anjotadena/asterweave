@@ -47,11 +47,12 @@ It should **not** normally run before every ticket once the repository is alread
 | Finish a half-built repository, module by module, in parallel | [`/asterweave:complete-project`](/commands/complete-project) |
 | Review code you (or someone else) wrote manually | [`/asterweave:review`](/commands/review) |
 | Resume interrupted work | [`/asterweave:resume`](/commands/resume) |
+| Move a long session's task to a fresh session | [`/asterweave:handoff`](/commands/handoff), then `/asterweave:handoff resume` |
 | Triage what to work on today | [`/asterweave:daily`](/commands/daily) |
 | Check plugin/repository health | [`/asterweave:doctor`](/commands/doctor) |
 | Learn from a completed/blocked workflow | [`/asterweave:retro`](/commands/retro) |
 
-See the full [command overview](/commands/overview) for all sixteen.
+See the full [command overview](/commands/overview) for all eighteen.
 
 ## What Asterweave automates vs. what stays yours
 

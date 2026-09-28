@@ -204,3 +204,28 @@ test("accepts provider and post-PR routing stages, rejects an unsupported provid
   );
   assert.ok(verifyScaffold(root).errors.some((error) => /provider.workItems/.test(error)));
 });
+
+test("accepts documented completion and handoff adapter settings and rejects invalid ones", () => {
+  const root = workspace();
+  writeFileSync(join(root, "package.json"), "{}\n");
+  mkdirSync(join(root, ".claude"), { recursive: true });
+  const adapterPath = join(root, ".claude", "asterweave.json");
+  writeFileSync(
+    adapterPath,
+    JSON.stringify({
+      version: 1,
+      completion: { parallelism: { maxWorkers: 4 } },
+      handoff: { staleAfterHours: 12, expireAfterHours: 168, track: false, contextBudget: { warnAtTokens: 150000 } },
+    }),
+  );
+  assert.deepEqual(verifyScaffold(root).errors, []);
+
+  writeFileSync(adapterPath, JSON.stringify({ version: 1, handoff: { staleAfterHours: 0, contextBudget: { warnAtTokens: 10 }, directory: "/tmp" } }));
+  const errors = verifyScaffold(root).errors.join("\n");
+  assert.match(errors, /handoff has unsupported field directory/);
+  assert.match(errors, /handoff.staleAfterHours must be a positive number/);
+  assert.match(errors, /warnAtTokens must be an integer of at least 1000/);
+
+  writeFileSync(adapterPath, JSON.stringify({ version: 1, completion: { parallelism: { maxWorkers: 40 } } }));
+  assert.match(verifyScaffold(root).errors.join("\n"), /maxWorkers must be an integer from 1 to 12/);
+});

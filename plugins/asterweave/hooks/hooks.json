@@ -32,6 +32,12 @@
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hook-stop-gate.mjs\"",
             "timeout": 10,
             "statusMessage": "Checking Asterweave evidence gates"
+          },
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hook-handoff-reminder.mjs\"",
+            "timeout": 10,
+            "statusMessage": "Checking optional handoff context budget"
           }
         ]
       }

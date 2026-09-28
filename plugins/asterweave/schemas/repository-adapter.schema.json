@@ -59,6 +59,33 @@
         }
       }
     },
+    "handoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "staleAfterHours": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "expireAfterHours": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "track": {
+          "type": "boolean"
+        },
+        "contextBudget": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "warnAtTokens": {
+              "type": "integer",
+              "minimum": 1000
+            }
+          }
+        }
+      }
+    },
     "qualityGates": {
       "type": "object",
       "additionalProperties": false,
