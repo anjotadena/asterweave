@@ -28,6 +28,14 @@ None — it operates purely on `.claude/asterweave/state.json`, which every `/as
 
 If `state.json` is missing or unparsable, the hook does nothing — it fails open, in the sense of not blocking anything, because it simply has no workflow to protect.
 
+## Optional handoff reminder
+
+A second, independent script on the same event, `hook-handoff-reminder.mjs`, is **inert unless you configure a threshold**. Set `handoff.contextBudget.warnAtTokens` in [`asterweave.json`](/configuration/asterweave-json), or the `ASTERWEAVE_HANDOFF_WARN_TOKENS` environment variable.
+
+Claude Code doesn't expose the model's context-window size or remaining tokens to hooks. The script reads the most recent main-conversation API usage recorded in the session transcript and treats it as an **approximate** current context size. When that reaches the threshold, it blocks the stop once, with a reason asking Claude to refresh the [handoff](/commands/handoff) and then end the turn. It asks again only when usage grows by another 25% of the threshold, per session.
+
+It respects `stop_hook_active`, never writes a handoff itself, never runs on tool calls, and does nothing when usage isn't recorded. Its only file is a small marker at `.claude/asterweave/handoffs/.reminders.json`.
+
 ## Related
 
-[Workflow state](/architecture/workflow-state), [Resume](/commands/resume).
+[Workflow state](/architecture/workflow-state), [Resume](/commands/resume), [Handoff](/commands/handoff).

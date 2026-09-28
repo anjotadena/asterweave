@@ -269,8 +269,31 @@ function validateAdapterObject(adapter, root, plannedPaths = new Set()) {
   const errors = [];
   const warnings = [];
   if (!adapter || typeof adapter !== "object" || Array.isArray(adapter)) return { errors: ["adapter: must be a JSON object"], warnings };
-  for (const field of Object.keys(adapter)) if (!["version", "provider", "routing", "qualityGates"].includes(field)) errors.push(`adapter: unsupported field ${field}`);
+  for (const field of Object.keys(adapter)) if (!["version", "provider", "routing", "completion", "handoff", "qualityGates"].includes(field)) errors.push(`adapter: unsupported field ${field}`);
   if (adapter.version !== 1) errors.push("adapter: version must be 1");
+  if (adapter.completion !== undefined) {
+    const maxWorkers = adapter.completion?.parallelism?.maxWorkers;
+    if (!adapter.completion || typeof adapter.completion !== "object" || Array.isArray(adapter.completion)) errors.push("adapter: completion must be an object");
+    else if (maxWorkers !== undefined && (!Number.isInteger(maxWorkers) || maxWorkers < 1 || maxWorkers > 12)) errors.push("adapter: completion.parallelism.maxWorkers must be an integer from 1 to 12");
+  }
+  if (adapter.handoff !== undefined) {
+    const handoff = adapter.handoff;
+    if (!handoff || typeof handoff !== "object" || Array.isArray(handoff)) {
+      errors.push("adapter: handoff must be an object");
+    } else {
+      for (const field of Object.keys(handoff)) if (!["staleAfterHours", "expireAfterHours", "track", "contextBudget"].includes(field)) errors.push(`adapter: handoff has unsupported field ${field}`);
+      for (const field of ["staleAfterHours", "expireAfterHours"]) {
+        if (handoff[field] !== undefined && !(typeof handoff[field] === "number" && handoff[field] > 0)) errors.push(`adapter: handoff.${field} must be a positive number`);
+      }
+      if (handoff.track !== undefined && typeof handoff.track !== "boolean") errors.push("adapter: handoff.track must be a boolean");
+      const warnAt = handoff.contextBudget?.warnAtTokens;
+      if (handoff.contextBudget !== undefined && (!handoff.contextBudget || typeof handoff.contextBudget !== "object" || Object.keys(handoff.contextBudget).some((key) => key !== "warnAtTokens"))) {
+        errors.push("adapter: handoff.contextBudget supports only warnAtTokens");
+      } else if (warnAt !== undefined && (!Number.isInteger(warnAt) || warnAt < 1000)) {
+        errors.push("adapter: handoff.contextBudget.warnAtTokens must be an integer of at least 1000");
+      }
+    }
+  }
   if (adapter.provider !== undefined) {
     if (!adapter.provider || typeof adapter.provider !== "object" || Array.isArray(adapter.provider)) {
       errors.push("adapter: provider must be an object");

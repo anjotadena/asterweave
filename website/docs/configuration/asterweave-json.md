@@ -21,6 +21,11 @@ The adapter file is `.claude/asterweave.json` — **JSON**, not YAML.
 | `routing.<stage>` | object | — | — | Per-stage routing to a project skill/agent. Keys must be one of the [routable stages](/architecture/agent-routing#routable-stages). |
 | `routing.<stage>.agent` | string (`^[a-z0-9]+(-[a-z0-9]+)*$`) | — | — | Name of a project agent under `.claude/agents/` to delegate this stage to. |
 | `routing.<stage>.skills` | string[] (same pattern, unique) | — | `[]` | Project skills to invoke before delegating this stage. |
+| `completion.parallelism.maxWorkers` | integer (1–12) | — | `3` | Upper bound on concurrent [`/asterweave:complete-project`](/commands/complete-project) workers. |
+| `handoff.staleAfterHours` | number (> 0) | — | `24` | Age after which a [handoff](/commands/handoff) is `stale` and its evidence must be rechecked. |
+| `handoff.expireAfterHours` | number (> 0) | — | `336` | Age after which a handoff is `expired` and must be reconstructed. |
+| `handoff.track` | boolean | — | `false` | `true` lets handoffs be committed. By default a self-ignoring `.gitignore` keeps them out of commits. |
+| `handoff.contextBudget.warnAtTokens` | integer (≥ 1000) | — | — | Opt-in [handoff reminder](/hooks/stop#optional-handoff-reminder) threshold, compared against the last recorded API usage. |
 | `qualityGates.required` | array | — | `[]` | Additional required quality-gate commands, added to every stage/final gate set. |
 | `qualityGates.required[].id` | string (`^[a-z0-9]+(-[a-z0-9]+)*$`) | ✅ (within entry) | — | A short identifier for the gate. |
 | `qualityGates.required[].command` | string | ✅ (within entry) | — | The exact command to run. |

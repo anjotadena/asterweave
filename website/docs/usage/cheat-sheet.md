@@ -43,6 +43,14 @@ description: The scannable, copy-paste version of everything on this page.
 /asterweave:resume
 ```
 
+**Hand a long session to a fresh one**
+
+```text
+/asterweave:handoff
+claude "/asterweave:handoff resume --task <slug>"
+/asterweave:handoff status
+```
+
 **Check repository alignment without changing anything**
 
 ```text
