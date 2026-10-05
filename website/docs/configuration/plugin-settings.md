@@ -11,7 +11,7 @@ These are configured once, at the Claude Code level, when you enable the plugin 
 | Setting | Type | Required | Sensitive | Description |
 | --- | --- | :---: | :---: | --- |
 | `github_token` | string | ✅ | ✅ | Fine-grained GitHub token with access only to the repositories and operations you want Asterweave to use. |
-| `ado_organization` | string | — | — | Azure DevOps organization name. Only needed when a repository sets `provider.workItems: azure-devops` in its `.claude/asterweave.json`. |
+| `ado_organization` | string | — | — | Azure DevOps organization name. Only needed when a repository sets `provider.workItems: azure-devops` in its `.claude/asterweave.json`. While it is unset, the `azuredevops` MCP server still connects but exposes no tools. |
 | `ado_pat_base64` | string | — | ✅ | Base64 of `<email>:<personal-access-token>` for Azure DevOps, as required by the official Azure DevOps MCP server. Leave unset unless you use Azure DevOps. |
 
 The plugin ships **disabled by default** — enabling it activates its hooks and prompts for `github_token` immediately. See [GitHub token posture](/repositories/repository-integration#github-token-posture) for the recommended token scope.

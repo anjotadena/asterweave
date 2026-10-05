@@ -74,9 +74,10 @@ After each worker reaches `complete`, its module-level verification (tests, targ
 
 ## Phase 23-25 — Merge, integration verification, cross-module scenarios
 
-1. Integrate completed workstream branches in dependency order — never all at once. Inspect overlapping changes, resolve semantic conflicts, and prefer one PR per workstream via `asterweave:pr-engineer` unless the repository's delivery model requires a consolidated branch.
+1. Integrate completed workstream branches in dependency order — never all at once — into the run's integration branch (`asterweave/<runId>` or the release branch the user named), never the default branch. Inspect overlapping changes and resolve semantic conflicts.
 2. Run full integration verification with `asterweave:verification-engineer`: full build, full test suite, integration/E2E tests, architecture checks, security checks, database/contract validation. Passing module tests independently does not prove integration.
 3. Validate the cross-module workflows the dependency graph flagged (e.g. Front Office → Finance, Receiving → Inventory → Finance). Record: `completion-state.mjs integration set <runId> --file <path>`, then `phase <runId> integration-verification`.
+4. Land the work through a pull request under the [merge and integration strategy](../../references/project-completion.md#merge-and-integration-strategy): `/asterweave:submit-pr` with `asterweave:pr-engineer` (one PR per workstream, or one consolidated PR when the repository's delivery model requires it), then monitor required CI checks. Route a failing check back to its workstream as a bounded fix; pause the run instead of polling when checks or reviews are still pending. Never merge the PR or push to the default branch unless the user explicitly asks in this session.
 
 ## Phase 26-27 — Final audit and report
 
@@ -86,4 +87,4 @@ After each worker reaches `complete`, its module-level verification (tests, targ
 
 ## Termination
 
-Finish only when every wave reached a terminal state, integration verification passed, the final audit reflects observable (not assumed) completion, and remaining work is captured as a prioritized backlog. If budgets, an unresolved ownership conflict, or a genuine ambiguity block progress, pause the run (`completion-state.mjs pause <runId> --reason "..."`) with a concise blocker and recommended human decision — never claim completion by weakening a gate.
+Finish only when every wave reached a terminal state, integration verification passed, the integrated work is in a pull request whose required checks passed (or the user explicitly chose a different landing), the final audit reflects observable (not assumed) completion, and remaining work is captured as a prioritized backlog. If budgets, an unresolved ownership conflict, or a genuine ambiguity block progress, pause the run (`completion-state.mjs pause <runId> --reason "..."`) with a concise blocker and recommended human decision — never claim completion by weakening a gate.

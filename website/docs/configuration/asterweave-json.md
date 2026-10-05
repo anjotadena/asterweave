@@ -26,6 +26,8 @@ The adapter file is `.claude/asterweave.json` — **JSON**, not YAML.
 | `handoff.expireAfterHours` | number (> 0) | — | `336` | Age after which a handoff is `expired` and must be reconstructed. |
 | `handoff.track` | boolean | — | `false` | `true` lets handoffs be committed. By default a self-ignoring `.gitignore` keeps them out of commits. |
 | `handoff.contextBudget.warnAtTokens` | integer (≥ 1000) | — | — | Opt-in [handoff reminder](/hooks/stop#optional-handoff-reminder) threshold, compared against the last recorded API usage. |
+| `autoContinue.enabled` | boolean | — | `true` | `false` turns off the [auto-continue stop gate](/hooks/stop) for this repository. |
+| `autoContinue.maxNudges` | integer (1–200) | — | `25` | How many times the stop gate sends one session back to work before it lets the turn end. |
 | `qualityGates.required` | array | — | `[]` | Additional required quality-gate commands, added to every stage/final gate set. |
 | `qualityGates.required[].id` | string (`^[a-z0-9]+(-[a-z0-9]+)*$`) | ✅ (within entry) | — | A short identifier for the gate. |
 | `qualityGates.required[].command` | string | ✅ (within entry) | — | The exact command to run. |

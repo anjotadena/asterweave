@@ -12,21 +12,38 @@ description: Keeps an active Asterweave workflow moving instead of ending mid-fl
 
 ## Purpose
 
-Prevents an active Asterweave workflow from being silently abandoned mid-node. Claude Code's own continuation cap is a separate, additional escape hatch; this hook is what keeps a workflow moving under normal circumstances.
+Long runs shouldn't need a human typing "continue". While a `/asterweave:deliver` graph or a `/asterweave:complete-project` run still has work to do, this hook blocks the stop and sends Claude back to the ledger. Approval checkpoints, blocked runs and questions to the user still end the turn.
 
 ## Behavior
 
-`hook-stop-gate.mjs` reads `.claude/asterweave/state.json`. If there is no active workflow, the workflow is `done`, or it is currently paused at `approve` (a deliberate stop point), the hook does nothing and the turn ends normally. Otherwise, it injects additional context telling Claude to continue the current graph node, record environment evidence, and transition through `graph-state.mjs` — or, if human input is genuinely required, to record a `needs-human` outcome so the workflow becomes properly `blocked` and the turn may end.
+`hook-stop-gate.mjs` looks at `.claude/asterweave/state.json` and every `.claude/asterweave/completion/<runId>/state.json`. It only considers ledgers written **during the current session** (since the transcript's first timestamp), so an old run left active in the repository never hijacks an unrelated session.
 
-It also respects `stop_hook_active` from its own payload, to avoid looping the same reminder indefinitely.
+A ledger is unfinished when its status is `active` and it is not at a deliberate stopping point: graph node `approve` or `done`, or completion phase `awaiting-approval` or `done`. When at least one is unfinished, the hook returns `decision: "block"` with a reason that names each run and its node or phase. That tells Claude to keep going, record evidence, and transition through the state script.
+
+It lets the turn end when:
+
+- Claude's last message ends with a question, which is a real escalation to the user;
+- neither the ledgers, `HEAD`, nor the working tree changed across two consecutive nudges (the run is stuck, not progressing);
+- the session reached `autoContinue.maxNudges` nudges (default 25);
+- the [handoff reminder](#optional-handoff-reminder) threshold is reached, so the reminder can ask for a handoff instead;
+- it is disabled.
+
+It deliberately ignores `stop_hook_active`, which would cap it at one nudge per human turn. Its per-session counter, kept in the OS temp directory, bounds the loop instead.
 
 ## Configuration
 
-None — it operates purely on `.claude/asterweave/state.json`, which every `/asterweave:deliver` run already maintains.
+| Setting | Effect |
+| --- | --- |
+| `autoContinue.enabled: false` in [`asterweave.json`](/configuration/asterweave-json) | Turns it off for the repository. |
+| `autoContinue.maxNudges` (1–200, default 25) | Per-session nudge cap. |
+| `ASTERWEAVE_NO_AUTOCONTINUE=1` | Turns it off for the session. |
+| A `.claude/asterweave/.no-autocontinue` file | Turns it off for the repository without editing config, for example mid-run. |
+
+The hook keeps a run going within one session. A run that stops because the usage limit was hit, or that ends with a [handoff](/commands/handoff), still needs a new session: `/asterweave:resume`, `/asterweave:handoff resume`, or `/loop /asterweave:resume` to retry on an interval.
 
 ## Failure behavior
 
-If `state.json` is missing or unparsable, the hook does nothing — it fails open, in the sense of not blocking anything, because it simply has no workflow to protect.
+If there is no transcript, no ledger, an unparsable ledger, or the counter can't be written, the hook does nothing. It fails open, never blocking a stop it can't bound.
 
 ## Optional handoff reminder
 

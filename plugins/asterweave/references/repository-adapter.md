@@ -8,6 +8,8 @@ Routable stages are `analyze`, `challenge`, `plan`, `implement`, `test`, `verify
 
 `completion.parallelism.maxWorkers` (optional, 1-12, default 3) bounds how many `/asterweave:complete-project` module workers may be active at once in this repository. It never raises the number of independent, parallel-safe workstreams the dependency graph actually found — see [project completion](project-completion.md).
 
+`autoContinue` (optional) tunes the Stop hook that keeps an active `deliver` graph or `complete-project` run going without a human "continue". `enabled` (default `true`) turns it off for the repository; `maxNudges` (1-200, default 25) caps how many times one session is sent back to work. The hook only acts on ledgers the current session wrote, stops at approval checkpoints and blocked or paused runs, lets a question to the user end the turn, and gives up after two stops with no ledger, commit, or working-tree change. `ASTERWEAVE_NO_AUTOCONTINUE=1` or a `.claude/asterweave/.no-autocontinue` file disables it without editing this file.
+
 ```json
 {
   "version": 1,

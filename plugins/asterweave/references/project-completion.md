@@ -207,9 +207,26 @@ once): inspect each diff for overlap, resolve semantic conflicts, then run
 `integration-verification` — full build, full test suite, integration/E2E, architecture and
 security checks, and the cross-module scenarios the dependency graph flagged (e.g. Front Office →
 Finance, Receiving → Inventory → Finance). Passing module tests independently does not prove
-modules integrate. Record results with `completion-state.mjs integration set`. Prefer one PR per
-meaningful workstream via `asterweave:pr-engineer` unless the repository's delivery model requires
-a single consolidated branch.
+modules integrate. Record results with `completion-state.mjs integration set`.
+
+Integrate into a run integration branch (for example `asterweave/<runId>`, or the release branch
+the user named), never into the default branch. A run is delivered when its work is in a pull
+request, not when it is merged locally:
+
+1. Submit through `/asterweave:submit-pr` and `asterweave:pr-engineer`: one PR per meaningful
+   workstream, or one consolidated PR from the integration branch when the repository's delivery
+   model requires it. Pushing the run's own branches and opening its PRs is part of the run once
+   the user approved the wave plan; still show the PR plan before the first push.
+2. Monitor the required CI checks on each PR the same way the `deliver` graph's
+   `monitor-pipeline` node does. A failing check reopens its workstream as a bounded fix with the
+   failing log excerpt as the failure signature; checks still running when the bounded wait expires
+   pause the run (`completion-state.mjs pause`) instead of spinning.
+3. Never merge the PR, push to the default branch, or bypass branch protection. A direct merge or
+   push to the default branch happens only when the user asks for it explicitly in the current
+   session; record that instruction in the final report. The destructive-command guard asks before
+   any push that targets `main` or `master`.
+
+The final report lists every PR with its head SHA and required-check conclusions.
 
 ## Resumability and observability
 

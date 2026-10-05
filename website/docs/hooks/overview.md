@@ -41,9 +41,9 @@ Asterweave does not ship a `PostToolUse` or `SessionStart` hook. If a repository
 
 | Hook | Event | Purpose |
 | --- | --- | --- |
-| [Destructive-command guard](/hooks/pre-tool-use) | `PreToolUse`, matching `Bash`/`PowerShell` | Blocks a fixed list of known high-impact shell commands before they run. |
+| [Destructive-command guard](/hooks/pre-tool-use) | `PreToolUse`, matching `Bash`/`PowerShell` | Blocks a fixed list of known high-impact shell commands before they run, and asks before a push to `main`/`master`. |
 | [Workstream ownership guard](/hooks/ownership-guard) | `PreToolUse`, matching `Edit`/`Write`/`NotebookEdit` | Blocks a [`/asterweave:complete-project`](/commands/complete-project) worker from writing outside its assigned module boundary. Inert in every other session. |
-| [Evidence stop gate](/hooks/stop) | `Stop` | Keeps an active Asterweave workflow moving instead of letting the turn end mid-flight. |
+| [Evidence stop gate](/hooks/stop) | `Stop` | Auto-continues an active `deliver` graph or `complete-project` run this session is driving, so it doesn't wait for a human "continue". |
 | [Handoff reminder](/hooks/stop#optional-handoff-reminder) | `Stop` | Opt-in. When recorded context usage reaches a configured threshold, it asks once for a [handoff](/commands/handoff) refresh. Inert by default. |
 
 ## Defense in depth, not a complete safety system

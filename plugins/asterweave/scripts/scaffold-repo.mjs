@@ -269,7 +269,7 @@ function validateAdapterObject(adapter, root, plannedPaths = new Set()) {
   const errors = [];
   const warnings = [];
   if (!adapter || typeof adapter !== "object" || Array.isArray(adapter)) return { errors: ["adapter: must be a JSON object"], warnings };
-  for (const field of Object.keys(adapter)) if (!["version", "provider", "routing", "completion", "handoff", "qualityGates"].includes(field)) errors.push(`adapter: unsupported field ${field}`);
+  for (const field of Object.keys(adapter)) if (!["version", "provider", "routing", "completion", "handoff", "autoContinue", "qualityGates"].includes(field)) errors.push(`adapter: unsupported field ${field}`);
   if (adapter.version !== 1) errors.push("adapter: version must be 1");
   if (adapter.completion !== undefined) {
     const maxWorkers = adapter.completion?.parallelism?.maxWorkers;
@@ -292,6 +292,17 @@ function validateAdapterObject(adapter, root, plannedPaths = new Set()) {
       } else if (warnAt !== undefined && (!Number.isInteger(warnAt) || warnAt < 1000)) {
         errors.push("adapter: handoff.contextBudget.warnAtTokens must be an integer of at least 1000");
       }
+    }
+  }
+  if (adapter.autoContinue !== undefined) {
+    const autoContinue = adapter.autoContinue;
+    if (!autoContinue || typeof autoContinue !== "object" || Array.isArray(autoContinue)) {
+      errors.push("adapter: autoContinue must be an object");
+    } else {
+      for (const field of Object.keys(autoContinue)) if (!["enabled", "maxNudges"].includes(field)) errors.push(`adapter: autoContinue has unsupported field ${field}`);
+      if (autoContinue.enabled !== undefined && typeof autoContinue.enabled !== "boolean") errors.push("adapter: autoContinue.enabled must be a boolean");
+      const maxNudges = autoContinue.maxNudges;
+      if (maxNudges !== undefined && (!Number.isInteger(maxNudges) || maxNudges < 1 || maxNudges > 200)) errors.push("adapter: autoContinue.maxNudges must be an integer from 1 to 200");
     }
   }
   if (adapter.provider !== undefined) {
