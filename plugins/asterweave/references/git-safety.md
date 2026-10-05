@@ -18,9 +18,10 @@
 ## Submission
 
 - Do not work directly on a protected/default branch.
+- Land finished work through a pull request and its required checks (`/asterweave:submit-pr`), not a local merge. Push to or merge into the default branch only when the user explicitly asks in the current session.
 - Use logical commits with clear messages and no unrelated changes.
 - Push without force. Never rewrite shared history.
 - Confirm base/head repository and branch before creating a PR.
 - Do not merge, self-approve, dismiss reviews, bypass checks, or delete branches.
 
-The pre-tool hook blocks a small set of destructive commands but is not a complete safety system. Continue to use Claude Code permissions, sandboxing, branch protection, required checks, CODEOWNERS, and human review.
+The pre-tool hook blocks a small set of destructive commands, and asks for confirmation before a push that targets `main` or `master`, but it is not a complete safety system. Continue to use Claude Code permissions, sandboxing, branch protection, required checks, CODEOWNERS, and human review.

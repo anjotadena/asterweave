@@ -229,3 +229,18 @@ test("accepts documented completion and handoff adapter settings and rejects inv
   writeFileSync(adapterPath, JSON.stringify({ version: 1, completion: { parallelism: { maxWorkers: 40 } } }));
   assert.match(verifyScaffold(root).errors.join("\n"), /maxWorkers must be an integer from 1 to 12/);
 });
+
+test("accepts documented autoContinue settings and rejects invalid ones", () => {
+  const root = workspace();
+  writeFileSync(join(root, "package.json"), "{}\n");
+  mkdirSync(join(root, ".claude"), { recursive: true });
+  const adapterPath = join(root, ".claude", "asterweave.json");
+  writeFileSync(adapterPath, JSON.stringify({ version: 1, autoContinue: { enabled: true, maxNudges: 40 } }));
+  assert.deepEqual(verifyScaffold(root).errors, []);
+
+  writeFileSync(adapterPath, JSON.stringify({ version: 1, autoContinue: { enabled: "yes", maxNudges: 0, forever: true } }));
+  const errors = verifyScaffold(root).errors.join("\n");
+  assert.match(errors, /autoContinue has unsupported field forever/);
+  assert.match(errors, /autoContinue.enabled must be a boolean/);
+  assert.match(errors, /autoContinue.maxNudges must be an integer from 1 to 200/);
+});

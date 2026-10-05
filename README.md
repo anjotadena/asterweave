@@ -161,7 +161,7 @@ Run `/asterweave:scaffold` when adopting a repository or when its architecture/t
 - **18 workflow skills** under the `/asterweave:` namespace.
 - **13 specialist agents**, least-privilege by design — read-only analyzers/reviewers, write-capable implementers/testers.
 - **GitHub MCP** for issues, PRs, CI checks, and review comments, with an **optional Azure DevOps MCP** for organizations tracking work in Azure Boards instead.
-- **Deterministic hooks**: a destructive-command guard, an evidence-based stop gate, a per-workstream ownership guard for parallel completion runs, and an opt-in context-budget handoff reminder.
+- **Deterministic hooks**: a destructive-command guard that also asks before pushes to `main`/`master`, an auto-continue stop gate for active runs, a per-workstream ownership guard for parallel completion runs, and an opt-in context-budget handoff reminder.
 - **Progressive stack rule packs**: .NET/ASP.NET Core/WPF/WinForms, Angular/React/React Native/Node/Next/Nest/Electron, PHP/Laravel, WordPress, Python/Django, Flutter, and mobile concerns.
 
 ---

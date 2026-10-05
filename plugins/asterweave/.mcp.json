@@ -10,8 +10,8 @@
     },
     "azuredevops": {
       "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "@azure-devops/mcp", "${user_config.ado_organization}", "--authentication", "pat"],
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/ado-mcp.mjs", "${user_config.ado_organization}"],
       "env": {
         "PERSONAL_ACCESS_TOKEN": "${user_config.ado_pat_base64}"
       }

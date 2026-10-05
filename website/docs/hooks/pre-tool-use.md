@@ -33,6 +33,18 @@ Blocks a small, fixed set of known high-impact shell commands before they execut
 | Deleting a Kubernetes namespace | Namespace deletion is outside autonomous coding scope |
 | Terraform's destroy command | Infrastructure destruction is outside autonomous coding scope |
 
+## What it asks about
+
+Asterweave lands work through a pull request and its required checks ([`/asterweave:submit-pr`](/commands/submit-pr)). A push that would skip that returns `permissionDecision: "ask"`, so you confirm it yourself:
+
+| Command | Why it asks |
+| --- | --- |
+| `git push <remote> main` / `master`, including `HEAD:main` and `refs/heads/master` refspecs | Pushes directly to the default branch |
+| A bare `git push` while `main` or `master` is checked out | Same, through the upstream |
+| `git push --all` or `--mirror` | Can land work on the default branch |
+
+Pushing a feature branch, pushing tags, and deleting a remote branch are not affected. Approve the prompt when you asked for a direct push; set `ASTERWEAVE_ALLOW_DEFAULT_BRANCH_PUSH=1` to turn the check off for a session.
+
 ## Configuration
 
 No repository-level configuration is needed or expected — the block list is fixed in the plugin. Setting the environment variable `ASTERWEAVE_DISABLE_DESTRUCTIVE_GUARD=1` disables the guard entirely; this exists for the plugin's own test suite, not as a normal operational escape hatch. Do not disable it to get past a workflow obstacle — see [Security](/repositories/repository-integration#github-token-posture).
