@@ -151,8 +151,14 @@ Run `/asterweave:scaffold` when adopting a repository or when its architecture/t
 | `/asterweave:handoff [create|resume|status]` | Hand a long session's task to a fresh session with an evidence-labeled handoff |
 | `/asterweave:daily` | Triage assigned work, read-only |
 | `/asterweave:doctor` | Diagnose plugin/repository health |
+| `asterweave` (CLI, preview) | Standalone terminal CLI: GitHub sign-in, repository connect, `doctor`, `config`, `trust` — run from `packages/cli`; no agent loop yet |
 
 **[Complete command reference →](https://anjotadena.github.io/asterweave/commands/overview)**
+
+### CLI (preview)
+
+`packages/cli` is a zero-dependency Node 22+ command-line interface that is not published to npm yet. Run it from a clone with `node packages/cli/bin/asterweave.mjs doctor`.
+**[CLI documentation →](https://anjotadena.github.io/asterweave/cli/overview)**
 
 ---
 
