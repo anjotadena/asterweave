@@ -10,6 +10,8 @@ Routable stages are `analyze`, `challenge`, `plan`, `implement`, `test`, `verify
 
 `autoContinue` (optional) tunes the Stop hook that keeps an active `deliver` graph or `complete-project` run going without a human "continue". `enabled` (default `true`) turns it off for the repository; `maxNudges` (1-200, default 25) caps how many times one session is sent back to work. The hook only acts on ledgers the current session wrote, stops at approval checkpoints and blocked or paused runs, lets a question to the user end the turn, and gives up after two stops with no ledger, commit, or working-tree change. `ASTERWEAVE_NO_AUTOCONTINUE=1` or a `.claude/asterweave/.no-autocontinue` file disables it without editing this file.
 
+`hooks` (optional) lists executable hooks for the Asterweave CLI runtime (`asterweave run`); the plugin itself never runs them. Each entry is `{ id, event, argv, kind, timeoutMs, onFailure }`: `argv` is the command and its arguments (no shell), `event` is one of `run.started`, `node.before-enter`, `tool.before`, `tool.after`, `node.completed`, `approval.requested`, `run.finished`, `kind` is `validate` (may only tighten a guard decision, and only on the blocking events `node.before-enter` and `tool.before`) or `log` (observe only), `timeoutMs` is 1-30000, and `onFailure` is `block` or `ignore`. Hooks are executable repository config, so the CLI loads them only for a trusted repository (`asterweave trust grant`); a change to this file makes the repository untrusted again. See the CLI hooks guide in the documentation website.
+
 ```json
 {
   "version": 1,

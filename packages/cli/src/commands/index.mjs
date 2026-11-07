@@ -16,7 +16,9 @@ import { authCommand, authCommandMeta } from "./auth.mjs";
 import { configCommand, configCommandMeta } from "./config.mjs";
 import { doctorCommand, doctorCommandMeta } from "./doctor.mjs";
 import { COMMAND_HELP, helpCommand, helpCommandMeta } from "./help.mjs";
+import { hookCommand, hookCommandMeta } from "./hook.mjs";
 import { repoCommand, repoCommandMeta } from "./repo.mjs";
+import { runCommand, runCommandMeta } from "./run.mjs";
 import { trustCommand, trustCommandMeta } from "./trust.mjs";
 
 /** Load commands/launch.mjs lazily; `null` when the module is not present in this build. */
@@ -50,13 +52,13 @@ export function createLaunchCommand({ loadLaunch = defaultLoadLaunch } = {}) {
 export const launchCommandMeta = Object.freeze({ summary: "Start the interactive session (also what plain `asterweave` does)", boolean: ["json"], options: ["json"] });
 
 /**
- * Register help, launch, doctor, repo, auth, config and trust on `registry`.
+ * Register help, launch, doctor, repo, auth, config, trust, run and the hidden hook command on `registry`.
  * @param {Map<string, object>} registry
  * @param {{loadLaunch?: () => Promise<object | null>}} [options]
  * @returns {Map<string, object>} the same registry
  */
 export function registerAllCommands(registry, { loadLaunch } = {}) {
-  const add = (name, handler, meta) => registry.set(name, { handler, summary: meta.summary ?? "", boolean: [...(meta.boolean ?? [])], options: meta.options ? [...meta.options] : undefined, helpText: COMMAND_HELP[name] });
+  const add = (name, handler, meta) => registry.set(name, { handler, summary: meta.summary ?? "", boolean: [...(meta.boolean ?? [])], options: meta.options ? [...meta.options] : undefined, hidden: meta.hidden === true, helpText: COMMAND_HELP[name] });
   add("help", helpCommand, helpCommandMeta);
   add("launch", createLaunchCommand({ loadLaunch }), launchCommandMeta);
   add("doctor", doctorCommand, doctorCommandMeta);
@@ -64,5 +66,7 @@ export function registerAllCommands(registry, { loadLaunch } = {}) {
   add("auth", authCommand, authCommandMeta);
   add("config", configCommand, configCommandMeta);
   add("trust", trustCommand, trustCommandMeta);
+  add("run", runCommand, runCommandMeta);
+  add("hook", hookCommand, hookCommandMeta);
   return registry;
 }

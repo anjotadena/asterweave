@@ -117,7 +117,7 @@ test("stringifyJson escapes C1, bidi and line separators in values and keys, and
 });
 
 test("no source file writes to a stream with a bare JSON.stringify (only the shared writer, stored files and text display remain)", () => {
-  const allowed = { "json.mjs": 1, "store.mjs": 1, "config.mjs": 1, "commands/config.mjs": 1, "trust.mjs": 1 }; // stringifyJson itself, files on disk (store, lock body), text display
+  const allowed = { "json.mjs": 1, "store.mjs": 1, "config.mjs": 1, "commands/config.mjs": 1, "trust.mjs": 1, "runtime/ledger.mjs": 1, "runtime/lock.mjs": 1 }; // stringifyJson itself, files on disk (store, lock body, ledger event line), text display
   const counts = {};
   const walk = (dir) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -573,4 +573,71 @@ test("an unreadable (mode 000) settings file is a finding in both classifiers", 
   } finally {
     nodeFs.chmodSync(settings, 0o600);
   }
+});
+
+// --- 10. repository hooks are executable config -------------------------------------------------------------------------------
+
+function hookRepo(sandbox, { name = "hook repo", extra = {} } = {}) {
+  const repo = join(sandbox.dir, name);
+  mkdirSync(join(repo, ".claude"), { recursive: true });
+  const hooks = [
+    { id: "a", event: "tool.before", argv: ["HOOK_ARGV_MARKER", "--x"], kind: "validate", timeoutMs: 1000, onFailure: "block" },
+    { id: "b", event: "node.completed", argv: ["HOOK_ARGV_MARKER", "--y"], kind: "log", timeoutMs: 1000, onFailure: "ignore" },
+  ];
+  writeFileSync(join(repo, ".claude", "asterweave.json"), JSON.stringify({ version: 1, hooks, ...extra }));
+  return repo;
+}
+
+test("both classifiers report each repository hook as a 'hook' finding by field name, never the argv", () => {
+  const sandbox = box();
+  const repo = hookRepo(sandbox);
+  const fromRepo = classifyExecutableConfig(repo);
+  const fromStatus = classifyExecutableFromStatus(trustStatus(repo, { trustFile: join(sandbox.dir, "trust.json") }));
+  const expected = [
+    { field: "hooks[0].argv", file: ".claude/asterweave.json", kind: "hook" },
+    { field: "hooks[1].argv", file: ".claude/asterweave.json", kind: "hook" },
+  ];
+  assert.deepEqual(fromRepo, expected);
+  assert.deepEqual(fromStatus, expected, "the two classifiers agree");
+  assert.equal(JSON.stringify([fromRepo, fromStatus]).includes("HOOK_ARGV_MARKER"), false);
+});
+
+test("hooks and quality gates in one adapter are both listed, gates first", () => {
+  const sandbox = box();
+  const repo = hookRepo(sandbox, { extra: { qualityGates: { required: [{ id: "g", command: "SECRET_CMD_MARKER", source: "test" }] } } });
+  const fields = classifyExecutableConfig(repo).map((item) => item.field);
+  assert.deepEqual(fields, ["qualityGates.required[0].command", "hooks[0].argv", "hooks[1].argv"]);
+});
+
+test("an adapter without a hooks array, or with an empty one, adds no hook finding", () => {
+  const sandbox = box();
+  const repo = hookRepo(sandbox, { name: "none" });
+  writeFileSync(join(repo, ".claude", "asterweave.json"), JSON.stringify({ version: 1, hooks: [] }));
+  assert.deepEqual(classifyExecutableConfig(repo), []);
+});
+
+test("config show --strict: a repository whose adapter has only hooks exits 4 until trusted, without printing the argv", () => {
+  const sandbox = box();
+  const repo = hookRepo(sandbox);
+  const strict = bin(["config", "show", "--strict", "--path", repo], sandbox);
+  assert.equal(strict.code, 4, strict.err);
+  assert.equal(strict.out, "");
+  assert.match(strict.err, /untrusted/);
+  assert.equal((strict.out + strict.err).includes("HOOK_ARGV_MARKER"), false);
+  const json = bin(["config", "show", "--strict", "--json", "--path", repo], sandbox);
+  assert.equal(json.code, 4);
+  assert.equal(JSON.parse(json.out).error.code, "TRUST_REQUIRED");
+
+  const preview = bin(["trust", "status", "--path", repo], sandbox);
+  assert.equal(preview.code, 0, preview.err);
+  assert.match(preview.out, /2\s+repository hook\(s\)\s+in \.claude\/asterweave\.json/);
+  assert.equal(preview.out.includes("HOOK_ARGV_MARKER"), false);
+
+  assert.equal(bin(["trust", "grant", "--path", repo], sandbox).code, 0);
+  assert.equal(bin(["config", "show", "--strict", "--path", repo], sandbox).code, 0, "trusted: hooks may be loaded");
+
+  assert.equal(bin(["trust", "revoke", "--path", repo], sandbox).code, 0);
+  const doctor = bin(["doctor"], sandbox, repo);
+  assert.match(doctor.out, /executable config found: 2 repository hooks/, doctor.out);
+  assert.equal((doctor.out + doctor.err).includes("HOOK_ARGV_MARKER"), false);
 });

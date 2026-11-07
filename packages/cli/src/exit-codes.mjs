@@ -8,6 +8,8 @@ export const EXIT = Object.freeze({
   AUTH: 3, // authentication required or invalid
   TRUST: 4, // repository trust required
   CONFIG: 5, // configuration invalid
+  APPROVAL_REQUIRED: 6, // a run is waiting for a human approval (or a human decision)
+  POLICY_DENIED: 7, // the guard or the policy refused an operation
   INTERRUPTED: 130, // SIGINT / Ctrl+C / closed input stream
 });
 

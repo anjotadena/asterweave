@@ -19,7 +19,7 @@ import { defaultRepoPath, isInteractive, seams, stringOption } from "./shared.mj
 export const trustCommandMeta = Object.freeze({ summary: "Review, grant or revoke trust for a repository's executable config", boolean: ["json"], options: ["json", "path"] });
 
 const USAGE = "Usage: asterweave trust [status|grant|revoke] [--path dir] [--json]";
-const KIND_LABEL = { command: "quality-gate command(s)", settings: "Claude Code settings file(s)", mcp: "MCP server config" };
+const KIND_LABEL = { command: "quality-gate command(s)", settings: "Claude Code settings file(s)", mcp: "MCP server config", hook: "repository hook(s)" };
 const write = (stream, text) => stream.write(text);
 
 /** Handler for `asterweave trust ...`. */
@@ -83,7 +83,7 @@ export async function trustCommand(ctx) {
 
 /** One-line counts of executable config (never command text). */
 function summarizeFindings(findings) {
-  const parts = ["command", "settings", "mcp"].map((kind) => [findings.filter((item) => item.kind === kind).length, KIND_LABEL[kind]]).filter(([count]) => count > 0);
+  const parts = ["command", "settings", "mcp", "hook"].map((kind) => [findings.filter((item) => item.kind === kind).length, KIND_LABEL[kind]]).filter(([count]) => count > 0);
   return parts.length > 0 ? parts.map(([count, label]) => `${count} ${label}`).join(", ") : "no executable config";
 }
 
@@ -104,9 +104,9 @@ function statusBody(status) {
 
 /** Findings grouped by kind: counts and file names only. */
 export function formatFindings(findings) {
-  if (findings.length === 0) return ["No executable repository config found (no quality-gate commands, Claude Code settings or MCP servers)."];
+  if (findings.length === 0) return ["No executable repository config found (no quality-gate commands, hooks, Claude Code settings or MCP servers)."];
   const lines = ["Executable repository config found:"];
-  for (const kind of ["command", "settings", "mcp"]) {
+  for (const kind of ["command", "settings", "mcp", "hook"]) {
     const items = findings.filter((item) => item.kind === kind);
     if (items.length === 0) continue;
     const files = [...new Set(items.map((item) => item.file))];
@@ -134,7 +134,7 @@ function formatGrantPreview(status, findings) {
     ...formatFindings(findings),
     "",
     ...(status.reason === "STORE_UNREADABLE" ? ["Note: the trust store (trust.json) is unreadable; granting replaces it with a fresh store.", ""] : []),
-    "Granting trust allows Asterweave to run the repository's quality-gate commands and Claude Code to load",
+    "Granting trust allows Asterweave to run the repository's quality-gate commands and hooks, and Claude Code to load",
     `its settings, hooks and MCP servers. Trust covers the current contents of: ${present.length > 0 ? present.join(", ") : "(none of the governing files exist yet)"}.`,
     "Any change to those files makes the repository untrusted again.",
     "",

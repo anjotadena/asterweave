@@ -244,3 +244,47 @@ test("accepts documented autoContinue settings and rejects invalid ones", () => 
   assert.match(errors, /autoContinue.enabled must be a boolean/);
   assert.match(errors, /autoContinue.maxNudges must be an integer from 1 to 200/);
 });
+
+test("accepts valid repository hooks and rejects invalid ones, consistent with the adapter schema", () => {
+  const root = workspace();
+  writeFileSync(join(root, "package.json"), "{}\n");
+  mkdirSync(join(root, ".claude"), { recursive: true });
+  const adapterPath = join(root, ".claude", "asterweave.json");
+  const hook = (overrides = {}) => ({ id: "audit", event: "tool.before", argv: ["node", "scripts/audit.mjs", "--strict"], kind: "validate", timeoutMs: 5000, onFailure: "block", ...overrides });
+  const errorsFor = (adapter) => {
+    writeFileSync(adapterPath, JSON.stringify({ version: 1, ...adapter }));
+    return verifyScaffold(root).errors.join("\n");
+  };
+
+  assert.equal(errorsFor({ hooks: [hook(), hook({ id: "trace", event: "tool.after", kind: "log", onFailure: "ignore" }), hook({ id: "gate", event: "node.before-enter" })] }), "");
+  assert.equal(errorsFor({ hooks: [{ id: "minimal", event: "run.finished", argv: ["notify"], kind: "log" }] }), "");
+  assert.equal(errorsFor({ hooks: [] }), "");
+
+  assert.match(errorsFor({ hooks: {} }), /hooks must be an array/);
+  assert.match(errorsFor({ hooks: ["node"] }), /hooks\[0\] must be an object/);
+  assert.match(errorsFor({ hooks: [hook({ kind: "validate", event: "tool.after" })] }), /validate hooks are only allowed on node\.before-enter and tool\.before/);
+  assert.match(errorsFor({ hooks: [hook({ event: "tool.during" })] }), /hooks\[0\]\.event must be one of/);
+  assert.match(errorsFor({ hooks: [hook({ kind: "audit" })] }), /hooks\[0\]\.kind must be validate or log/);
+  assert.match(errorsFor({ hooks: [hook({ id: "-bad id" })] }), /hooks\[0\]\.id must match/);
+  assert.match(errorsFor({ hooks: [hook({ argv: [] })] }), /hooks\[0\]\.argv must be an array of 1 to 64 strings/);
+  assert.match(errorsFor({ hooks: [hook({ argv: "node audit" })] }), /hooks\[0\]\.argv must be an array/);
+  assert.match(errorsFor({ hooks: [hook({ argv: ["node", `a${String.fromCharCode(0)}b`] })] }), /hooks\[0\]\.argv must be an array/);
+  assert.match(errorsFor({ hooks: [hook({ argv: [""] })] }), /argv\[0\] must be a non-empty command/);
+  assert.match(errorsFor({ hooks: [hook({ argv: ["git", "reset", "--hard"] })] }), /argv contains a destructive/);
+  assert.match(errorsFor({ hooks: [hook({ timeoutMs: 30001 })] }), /timeoutMs must be an integer from 1 to 30000/);
+  assert.match(errorsFor({ hooks: [hook({ timeoutMs: 0 })] }), /timeoutMs must be an integer from 1 to 30000/);
+  assert.match(errorsFor({ hooks: [hook({ onFailure: "retry" })] }), /onFailure must be block or ignore/);
+  assert.match(errorsFor({ hooks: [hook({ cwd: "/tmp" })] }), /hooks\[0\] has unsupported field cwd/);
+  assert.match(errorsFor({ hooks: [hook(), hook()] }), /duplicate id audit for event tool\.before/);
+});
+
+test("a blueprint may propose an adapter with hooks, and an invalid hook blocks the plan", () => {
+  const root = workspace();
+  writeFileSync(join(root, "package.json"), "{}\n");
+  const plan = (adapter) => validateBlueprint({ schemaVersion: 1, pluginVersion: "0.2.1", summary: "hooks", artifacts: [artifact(".claude/asterweave.json", "adapter", `${JSON.stringify(adapter)}\n`)] }, root);
+  const good = plan({ version: 1, hooks: [{ id: "trace", event: "tool.after", argv: ["node", "trace.mjs"], kind: "log" }] });
+  assert.equal(good.valid, true, good.errors.join("\n"));
+  const bad = plan({ version: 1, hooks: [{ id: "trace", event: "tool.after", argv: ["node"], kind: "validate" }] });
+  assert.equal(bad.valid, false);
+  assert.match(bad.errors.join("\n"), /validate hooks are only allowed/);
+});

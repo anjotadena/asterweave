@@ -6,7 +6,7 @@ description: "The standalone asterweave command-line interface (preview): what P
 
 # Asterweave CLI (preview)
 
-`asterweave` is a standalone terminal program that sits next to the [Claude Code plugin](/getting-started/installation). **Phase A** is the foundation: it signs you in, connects a local clone, shows your effective configuration, manages repository trust, and diagnoses your setup. It does **not** run agents yet.
+`asterweave` is a standalone terminal program that sits next to the [Claude Code plugin](/getting-started/installation). **Phase A** is the foundation: it signs you in, connects a local clone, shows your effective configuration, manages repository trust, and diagnoses your setup. It does **not** run agents yet. **Phase B** adds the run engine underneath (workflow graphs, a persistent ledger, guards, approvals and hooks) with a simulated executor; see [What Phase B adds](#what-phase-b-adds-and-its-limits).
 
 :::note Preview status
 The CLI lives in `packages/cli/` in the Asterweave repository. The package is marked `private` and is **not published to npm** yet, so there is no `npm install -g asterweave` today. Run it from a clone of the repository as described below. The plugin and its `/asterweave:` skills are unaffected by the CLI.
@@ -22,6 +22,20 @@ The CLI lives in `packages/cli/` in the Asterweave repository. The package is ma
 | Show every configuration key with the layer it came from | Run quality-gate commands, hooks, or MCP servers from a repository |
 | Record trust for a repository, bound to a content hash | Spawn `claude -p`, run `claude doctor`, or read a token |
 | Diagnose Node, `gh`, `claude`, the user directory, configuration, and the repository (`doctor`) | Provide `/sessions`, `/usage`, `/settings`, or `/context` (these are stubs) |
+
+## What Phase B adds and its limits
+
+Phase B adds the machinery a future agent loop will run on, so that its safety properties exist and are tested before any model is connected:
+
+| Phase B adds | Where |
+| --- | --- |
+| Workflow graphs `delivery@1` and `bugfix@1` as data, with attempt budgets, required evidence, bounded repair loops | [Runs](/cli/runs#graphs) |
+| A per-run ledger in the user directory (audit trail plus snapshot) that survives crashes, with a run lock | [Runs](/cli/runs#where-a-run-lives) |
+| `run show`, `run approve` and `run abort`; headless runs that stop with exit 6 and resume after you approve | [Runs](/cli/runs#public-commands) |
+| A fail-closed guard with reason codes, supervised and autonomous modes, `policy.json`, scoped approvals | [Policy and guards](/cli/policy-and-guards) |
+| User and trusted-repository hooks around a run | [Hooks](/cli/hooks) |
+
+**Limits of Phase B.** There are **no model calls** and **no real tool execution**: the only executor is a scripted fake one, and the tool dispatcher is a simulation. The commands that start or resume a run (`run start`, `run resume`) are hidden and need `ASTERWEAVE_DEV_EXECUTORS=1`. The shell classifier is a heuristic, not a sandbox ([limits](/cli/policy-and-guards#limits)). The hidden `hook pre-tool-use` command is experimental and does not replace the plugin's guard. Free text typed in the interactive session still shows "not available in this build".
 
 ## Requirements
 
@@ -101,6 +115,9 @@ In a picker or at the `trust grant` y/N prompt, Ctrl+D behaves like Esc: it canc
 | `asterweave repo connect` | Connect an existing local clone | `--repo owner/name`, `--branch name`, `--path dir`, `--json` |
 | `asterweave repo status` | Show the saved connection, work-tree state (always `unknown`: the work tree is never inspected), and trust | `--json` |
 | `asterweave config show` | Show effective configuration with the origin of every key. See [Configuration and trust](/cli/config-and-trust) | `--json`, `--strict`, `--path dir`, `--runner local`, `--github-host host`, `--ui-color auto\|always\|never` |
+| `asterweave run show [runId]` | Show a run: status, nodes and attempts, approvals with their subject hash, budgets, lock and policy. Defaults to the newest run of the repository. See [Runs](/cli/runs) | `--json` |
+| `asterweave run approve runId` | Approve a waiting run: y/N in a terminal, or `--approval` with the `--subject` hash prefix that `run show` prints | `--approval id`, `--subject hash`, `--json` |
+| `asterweave run abort runId` | Stop a run for good. Idempotent | `--yes`, `--json` |
 | `asterweave trust [status\|grant\|revoke]` | Review, grant, or revoke trust for a repository. Defaults to `status` | `--path dir`, `--json` |
 
 Every command accepts `-h` / `--help`, which prints that command's help and exits 0.
@@ -179,7 +196,7 @@ The full-screen views need a real console. Use **Windows Terminal**, or the clas
 
 - **Local only.** The only runner is `local`: everything happens on your machine, in your repository, under your account. There is no hosted backend, and no data is sent to an Asterweave service.
 - **Provider sign-in belongs to the providers.** `gh` and `claude` hold your tokens. Asterweave stores references only and never passes `--show-token`. See [Authentication](/cli/auth).
-- **No repository-controlled commands run in Phase A.** Quality-gate commands, `.claude/settings*.json` hooks, and `.mcp.json` servers are only detected and counted. See [what counts as executable](/cli/config-and-trust#what-counts-as-executable).
+- **Almost no repository-controlled commands run.** Quality-gate commands, `.claude/settings*.json` hooks, and `.mcp.json` servers are only detected and counted. The one exception is the `hooks` of `.claude/asterweave.json`, which `asterweave run` starts only for a **trusted** repository and only after the guard has looked at each hook command. See [what counts as executable](/cli/config-and-trust#what-counts-as-executable).
 - **No `claude -p`, no `claude doctor`.** Asterweave never starts a Claude Code agent run, and never calls `claude doctor` because that command can start the stdio servers declared in a repository's `.mcp.json`.
 - **Probes run outside your repository.** `gh auth status` and `claude auth status` run with the Asterweave user directory as their working directory, so a repository's `.claude/settings.json` is never loaded by them.
 - **No shell.** Programs are started from an argument array with `shell: false`. Host names are validated before they are placed in a command line.

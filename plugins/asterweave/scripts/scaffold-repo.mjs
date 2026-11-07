@@ -37,6 +37,9 @@ const ALLOWED_STAGES = new Set([
   "resolve-review-comments",
   "update-work-item",
 ]);
+const HOOK_EVENTS = new Set(["run.started", "node.before-enter", "tool.before", "tool.after", "node.completed", "approval.requested", "run.finished"]);
+const HOOK_BLOCKING_EVENTS = new Set(["node.before-enter", "tool.before"]);
+const HOOK_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const ALLOWED_KINDS = new Set(["instructions", "rule", "skill", "agent", "reference", "adapter"]);
 const EXCLUDED_DIRECTORIES = new Set([
   ".git",
@@ -265,11 +268,47 @@ function collectExistingDefinitions(root, category, ignoredTargets) {
   return names;
 }
 
+// Mirrors the "hooks" definition of schemas/repository-adapter.schema.json (the Asterweave CLI runtime loads these
+// only for a trusted repository). A `validate` hook may only sit on a blocking event.
+function validateHooks(hooks) {
+  const errors = [];
+  if (!Array.isArray(hooks)) return ["adapter: hooks must be an array"];
+  const seen = new Set();
+  for (const [index, hook] of hooks.entries()) {
+    const prefix = `adapter: hooks[${index}]`;
+    if (!hook || typeof hook !== "object" || Array.isArray(hook)) {
+      errors.push(`${prefix} must be an object`);
+      continue;
+    }
+    for (const field of Object.keys(hook)) if (!["id", "event", "argv", "kind", "timeoutMs", "onFailure"].includes(field)) errors.push(`${prefix} has unsupported field ${field}`);
+    if (typeof hook.id !== "string" || !HOOK_ID.test(hook.id)) errors.push(`${prefix}.id must match ${HOOK_ID}`);
+    if (!HOOK_EVENTS.has(hook.event)) errors.push(`${prefix}.event must be one of ${[...HOOK_EVENTS].join(", ")}`);
+    if (!["validate", "log"].includes(hook.kind)) errors.push(`${prefix}.kind must be validate or log`);
+    else if (hook.kind === "validate" && HOOK_EVENTS.has(hook.event) && !HOOK_BLOCKING_EVENTS.has(hook.event)) {
+      errors.push(`${prefix}: validate hooks are only allowed on ${[...HOOK_BLOCKING_EVENTS].join(" and ")}; use kind log for ${hook.event}`);
+    }
+    if (!Array.isArray(hook.argv) || hook.argv.length < 1 || hook.argv.length > 64 || hook.argv.some((part) => typeof part !== "string" || part.length > 4_096 || part.includes("\u0000"))) {
+      errors.push(`${prefix}.argv must be an array of 1 to 64 strings of at most 4096 characters`);
+    } else {
+      if (!hook.argv[0].trim()) errors.push(`${prefix}.argv[0] must be a non-empty command`);
+      if (DESTRUCTIVE_COMMAND.test(hook.argv.join(" "))) errors.push(`${prefix}.argv contains a destructive or deployment operation`);
+    }
+    if (hook.timeoutMs !== undefined && (!Number.isInteger(hook.timeoutMs) || hook.timeoutMs < 1 || hook.timeoutMs > 30_000)) errors.push(`${prefix}.timeoutMs must be an integer from 1 to 30000`);
+    if (hook.onFailure !== undefined && !["block", "ignore"].includes(hook.onFailure)) errors.push(`${prefix}.onFailure must be block or ignore`);
+    if (typeof hook.id === "string" && HOOK_EVENTS.has(hook.event)) {
+      const key = `${hook.id}\u0000${hook.event}`;
+      if (seen.has(key)) errors.push(`${prefix}: duplicate id ${hook.id} for event ${hook.event}`);
+      seen.add(key);
+    }
+  }
+  return errors;
+}
+
 function validateAdapterObject(adapter, root, plannedPaths = new Set()) {
   const errors = [];
   const warnings = [];
   if (!adapter || typeof adapter !== "object" || Array.isArray(adapter)) return { errors: ["adapter: must be a JSON object"], warnings };
-  for (const field of Object.keys(adapter)) if (!["version", "provider", "routing", "completion", "handoff", "autoContinue", "qualityGates"].includes(field)) errors.push(`adapter: unsupported field ${field}`);
+  for (const field of Object.keys(adapter)) if (!["version", "provider", "routing", "completion", "handoff", "autoContinue", "qualityGates", "hooks"].includes(field)) errors.push(`adapter: unsupported field ${field}`);
   if (adapter.version !== 1) errors.push("adapter: version must be 1");
   if (adapter.completion !== undefined) {
     const maxWorkers = adapter.completion?.parallelism?.maxWorkers;
@@ -342,6 +381,7 @@ function validateAdapterObject(adapter, root, plannedPaths = new Set()) {
   if (adapter.qualityGates && typeof adapter.qualityGates === "object" && !Array.isArray(adapter.qualityGates)) {
     for (const field of Object.keys(adapter.qualityGates)) if (field !== "required") errors.push(`adapter: qualityGates has unsupported field ${field}`);
   }
+  if (adapter.hooks !== undefined) errors.push(...validateHooks(adapter.hooks));
   const gates = adapter.qualityGates?.required || [];
   if (!Array.isArray(gates)) errors.push("adapter: qualityGates.required must be an array");
   for (const [index, gate] of (Array.isArray(gates) ? gates : []).entries()) {

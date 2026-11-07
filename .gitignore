@@ -1,3 +1,8 @@
 node_modules/
 *.log
 .DS_Store
+
+# Local agent state: never committed (.claude/asterweave.json is configuration and stays tracked)
+.claude/agent-memory-local/
+.claude/asterweave/
+.claude/settings.local.json
