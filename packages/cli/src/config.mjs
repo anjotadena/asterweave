@@ -16,6 +16,7 @@ import { HOST_PATTERN } from "./host.mjs";
 import { userFilePath } from "./paths.mjs";
 import { isSecretKeyName, redactDeep, sanitizeForTerminal } from "./redact.mjs";
 import { validateHookEntries } from "./runtime/hooks.mjs";
+import { EFFORTS, MAX_FALLBACK, MODEL_ID_PATTERN, STAGE_NODES } from "./runtime/routing.mjs";
 import { parseJsonText, readJson, StoreError } from "./store.mjs";
 import { assertTrusted, safeTrustStatus } from "./trust.mjs";
 
@@ -37,7 +38,7 @@ const WORK_ITEM_PROVIDERS = ["github", "azure-devops", "none"];
 
 /**
  * @typedef {object} KeyDefinition
- * @property {'string'|'boolean'|'integer'|'enum'|'gates'} type
+ * @property {'string'|'boolean'|'integer'|'enum'|'gates'|'modelList'} type
  * @property {unknown} default
  * @property {string} description
  * @property {string[]} [values]       Allowed values for `enum`.
@@ -50,12 +51,20 @@ const WORK_ITEM_PROVIDERS = ["github", "azure-devops", "none"];
  * @property {boolean} [userSettable]  Defaults to true; false for repo-only keys.
  */
 
-/** The complete set of Phase A configuration keys. Keys not listed here are not configurable. */
+/** Env variable of a stage model: model.stages.submit-pr -> ASTERWEAVE_MODEL_STAGE_SUBMIT_PR. */
+const stageEnv = (node) => `ASTERWEAVE_MODEL_STAGE_${node.toUpperCase().replaceAll("-", "_")}`;
+
+/** The complete set of configuration keys. Keys not listed here are not configurable. */
 export const KNOWN_KEYS = Object.freeze({
   runner: { type: "enum", values: ["local"], default: "local", env: "ASTERWEAVE_RUNNER", description: "Where agent work runs. Phase A supports only 'local'." },
   "github.host": { type: "string", pattern: HOST, default: "github.com", env: "ASTERWEAVE_GITHUB_HOST", description: "GitHub host used for sign-in and repository listing." },
   "ui.color": { type: "enum", values: ["auto", "always", "never"], default: "auto", env: "ASTERWEAVE_UI_COLOR", description: "Colored output. NO_COLOR and non-TTY output always disable color." },
   "provider.workItems": { type: "enum", values: WORK_ITEM_PROVIDERS, default: "none", env: "ASTERWEAVE_PROVIDER_WORKITEMS", repo: true, description: "Work-item provider (repository adapter field)." },
+  // Model routing (routing.mjs). User config and environment only: a repository must not choose where its prompts go.
+  "model.default": { type: "string", pattern: MODEL_ID_PATTERN, default: null, env: "ASTERWEAVE_MODEL", description: "Default model id for every stage (unset: the runner's own default)." },
+  "model.effort": { type: "enum", values: EFFORTS, default: null, env: "ASTERWEAVE_MODEL_EFFORT", description: "Reasoning effort requested from the model (unset: the runner's own default)." },
+  "model.fallback": { type: "modelList", default: null, env: "ASTERWEAVE_MODEL_FALLBACK", description: `Comma-separated model ids to fall back to on transient failures (at most ${MAX_FALLBACK}).` },
+  ...Object.fromEntries(STAGE_NODES.map((node) => [`model.stages.${node}`, { type: "string", pattern: MODEL_ID_PATTERN, default: null, env: stageEnv(node), description: `Model id for the '${node}' stage (overrides model.default).` }])),
   "qualityGates.required": { type: "gates", default: [], repo: true, executable: true, userSettable: false, description: "Quality-gate commands from the repository adapter. EXECUTABLE: applied only when the repository is trusted." },
 });
 
@@ -112,6 +121,15 @@ export function coerceValue(key, raw, { origin = "value", fromString = false } =
       const value = raw.trim();
       if (def.pattern && !def.pattern.test(value)) return fail(key, origin, "unexpected format");
       return value;
+    }
+    case "modelList": {
+      const items = Array.isArray(raw) ? raw : fromString || typeof raw === "string" ? String(raw).split(",") : null;
+      if (items === null) return fail(key, origin, "expected a comma-separated list of model ids");
+      const ids = items.map((item) => (typeof item === "string" ? item.trim() : null));
+      if (ids.length === 0 || ids.length > MAX_FALLBACK) return fail(key, origin, `expected 1 to ${MAX_FALLBACK} model ids`);
+      if (ids.some((id) => id === null || !MODEL_ID_PATTERN.test(id))) return fail(key, origin, "unexpected format");
+      if (new Set(ids).size !== ids.length) return fail(key, origin, "model ids must be unique");
+      return ids;
     }
     case "gates": {
       if (!Array.isArray(raw)) return fail(key, origin, "expected an array");
@@ -314,6 +332,55 @@ export function resolveConfig(options = {}) {
   }
 
   return { precedence: [...PRECEDENCE], entries, unknown: user.unknown, repo };
+}
+
+/**
+ * Only the `model.*` keys (user config + environment), validated; every other key of every layer is ignored, so an
+ * unrelated bad value cannot fail a caller that only needs the model routing (`run start`). An invalid model.* value
+ * is a ConfigError (exit 5) naming the key and where it came from, with a remediation. An unparsable user config.json
+ * is also a ConfigError: the model keys in it cannot be known.
+ * @param {ResolveOptions} [options]
+ * @returns {{entries: Record<string, {value: unknown, origin: string}>}}
+ */
+export function resolveModelConfig(options = {}) {
+  const env = options.env ?? process.env;
+  const fs = options.fs ?? nodeFs;
+  const keys = Object.keys(KNOWN_KEYS).filter((key) => key.startsWith("model."));
+  const entries = {};
+  for (const key of keys) entries[key] = { value: structuredClone(KNOWN_KEYS[key].default), origin: "default" };
+  const withRemediation = (error, file) => {
+    if (!(error instanceof ConfigError)) throw error;
+    const where = error.origin?.startsWith("env:") ? `the ${error.origin.slice(4)} environment variable` : file;
+    throw new ConfigError(error.message, { key: error.key, origin: error.origin, remediation: `Fix ${error.key ?? "the value"} in ${where}, or remove it.`, cause: error });
+  };
+  const userFile = options.userConfigFile ?? userFilePath("config", { env, platform: options.platform, homedir: options.homedir });
+  let data;
+  try {
+    data = readJson(userFile, { fallback: null, fs });
+  } catch (error) {
+    if (error instanceof StoreError) throw new ConfigError(error.message, { origin: `user:${userFile}`, remediation: `Fix or delete ${userFile}.`, cause: error });
+    throw error;
+  }
+  if (data !== null && !isPlainObject(data)) throw new ConfigError(`${userFile} must contain a JSON object.`, { origin: `user:${userFile}`, remediation: `Fix or delete ${userFile}.` });
+  for (const [key, value] of Object.entries(data === null ? {} : flatten(data))) {
+    if (!keys.includes(key)) continue;
+    try {
+      entries[key] = { value: coerceValue(key, value, { origin: `user:${userFile}` }), origin: `user:${userFile}` };
+    } catch (error) {
+      withRemediation(error, userFile);
+    }
+  }
+  for (const key of keys) {
+    const name = KNOWN_KEYS[key].env;
+    const raw = name ? env[name] : undefined;
+    if (raw === undefined || raw === "") continue;
+    try {
+      entries[key] = { value: coerceValue(key, raw, { origin: `env:${name}`, fromString: true }), origin: `env:${name}` };
+    } catch (error) {
+      withRemediation(error, userFile);
+    }
+  }
+  return { entries };
 }
 
 /**

@@ -100,6 +100,7 @@ export function computeTrustHash(repoPath, options = {}) {
   frame(hash, HASH_DOMAIN, key);
   const files = [];
   let adapter = { bytes: null, state: "missing" };
+  let mcp = { bytes: null, state: "missing" };
   for (const relative of TRUST_FILES) {
     const absolute = path.join(realpath, ...relative.split("/"));
     let content = null;
@@ -117,12 +118,15 @@ export function computeTrustHash(repoPath, options = {}) {
     frame(hash, relative, content);
     files.push({ file: relative, state });
     if (relative === ADAPTER_FILE) adapter = { bytes: state === "present" ? Buffer.from(content) : null, state };
+    if (relative === TRUST_FILES[3]) mcp = { bytes: state === "present" ? Buffer.from(content) : null, state };
   }
   // `adapter` carries the exact bytes of .claude/asterweave.json that went into the hash, so a caller
   // that parses the adapter parses what was hashed (no second read, no check/use gap). It is not
   // enumerable: it never shows up in JSON output or deep-equality comparisons.
   const result = { realpath, key, hash: hash.digest("hex"), files };
   Object.defineProperty(result, "adapter", { value: adapter, enumerable: false });
+  // Likewise the exact bytes of .mcp.json that were hashed: `mcp test` parses these, never a second read.
+  Object.defineProperty(result, "mcp", { value: mcp, enumerable: false });
   return result;
 }
 
@@ -153,7 +157,7 @@ function statusFor(computed, options) {
   }
   const entry = store && typeof store === "object" && !Array.isArray(store) ? store[computed.key] : undefined;
   const base = { realpath: computed.realpath, hash: computed.hash, files: computed.files };
-  const withAdapter = (status) => Object.defineProperty(status, "adapter", { value: computed.adapter, enumerable: false });
+  const withAdapter = (status) => Object.defineProperty(Object.defineProperty(status, "adapter", { value: computed.adapter, enumerable: false }), "mcp", { value: computed.mcp, enumerable: false });
   if (!entry || typeof entry.sha256 !== "string") return withAdapter({ trusted: false, reason: "NOT_GRANTED", trustedAt: null, ...base });
   if (entry.sha256 !== computed.hash) return withAdapter({ trusted: false, reason: "CHANGED", trustedAt: entry.trustedAt ?? null, previousHash: entry.sha256, ...base });
   return withAdapter({ trusted: true, reason: "TRUSTED", trustedAt: entry.trustedAt ?? null, ...base });

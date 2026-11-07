@@ -2,6 +2,7 @@
 // exit-codes.mjs and website/docs/cli/exit-codes.md.
 
 import { EXIT, UsageError } from "../exit-codes.mjs";
+import { mcpHelpText } from "./mcp.mjs";
 
 export const helpCommandMeta = Object.freeze({ summary: "Show help for asterweave or one command", boolean: [], options: [] });
 
@@ -141,6 +142,31 @@ export const COMMAND_HELP = Object.freeze({
     "declined, the work tree git reports is not the repository's) · 2 usage (including a subject that does not match) · 5 invalid policy or",
     "hooks configuration · 130 interrupted",
   ]),
+  usage: block([
+    "asterweave usage - token usage and budgets of a run (read-only)",
+    "",
+    "Usage: asterweave usage [runId] [--json]",
+    "",
+    "Shows measured tokens by counter, node and model, the latest context size and the budgets remaining.",
+    "Context size, cumulative usage and budget remaining are separate numbers. A value nobody measured is",
+    "'unknown', never 0. Without a run id: the newest run of this repository. Makes no model call.",
+    "",
+    'JSON: {"ok":true,"runId","usage":{"totals","byNode","byModel","context","budgets"}}',
+    "",
+    "Exit codes: 0 ok · 1 run not found or unreadable · 2 usage",
+  ]),
+  model: block([
+    "asterweave model - which model each stage uses and why (read-only)",
+    "",
+    "Usage: asterweave model [show | explain <node>] [--json]",
+    "",
+    "Shows the route pinned by the newest run against the current configuration (model.default, model.effort,",
+    "model.fallback, model.stages.<node>) and flags drift. Availability comes from a static catalog and is",
+    "labelled unverified; nothing here talks to a provider.",
+    "",
+    "Exit codes: 0 ok · 1 error · 2 usage",
+  ]),
+  mcp: block(mcpHelpText.split("\n")),
   trust: block([
     "asterweave trust - review, grant or revoke trust for a repository",
     "",

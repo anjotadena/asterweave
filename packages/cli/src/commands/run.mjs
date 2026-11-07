@@ -42,6 +42,8 @@ import { isValidRunId, listRuns, loadRun, repairTail, runDir } from "../runtime/
 import { commitRecords, commitTransition, completeInterruptedGroup, createRunForGraph, foldEvents, runLoop } from "../runtime/loop.mjs";
 import { acquireRunLock, inspectRunLock } from "../runtime/lock.mjs";
 import { DEFAULT_BUDGETS, loadPolicy, resolveBudgets } from "../runtime/policy.mjs";
+import { pinRouting, routingFromEntries } from "../runtime/routing.mjs";
+import { resolveModelConfig } from "../config.mjs";
 import { worktreeRootProblem } from "../runtime/repo-root.mjs";
 import { askYesNo, withTerminal } from "../tui/session.mjs";
 import { createTerminal } from "../tui/terminal.mjs";
@@ -666,9 +668,10 @@ async function startRun(ctx, rest, deps) {
   const repo = await resolveRepo(ctx);
   // Configuration errors (exit 5) must surface before a run directory exists.
   const policy = loadPolicy(seams(ctx));
+  const routing = pinRouting(routingFromEntries(resolveModelConfig(seams(ctx)).entries)); // the model route is pinned for the life of the run
   const hooks = loadHooks({ ...seams(ctx), repoPath: repo.workspace });
   const branch = await currentBranch(ctx, repo.workspace);
-  const created = createRunForGraph({ graph, goal, repo: { key: repo.key, realpath: repo.workspace }, runId, policyHash: policy.policyHash, ...seams(ctx) });
+  const created = createRunForGraph({ graph, goal, repo: { key: repo.key, realpath: repo.workspace }, runId, policyHash: policy.policyHash, routing, ...seams(ctx) });
   return drive(ctx, { ...deps, dir: created.dir, graph, executor, policy, hooks, repo, branch, run: created.run });
 }
 

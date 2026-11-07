@@ -24,7 +24,10 @@
 //   allowCommands (argv prefixes the USER's policy.json treats as understood; also read from policy.allowCommands),
 //   maxCommandChars (can only lower the 64 KiB cap), budgetMs (time budget of one classification),
 //   approvals: [{scope:{operation,target}}]  already-VALID scoped approvals (a deny is never overridden by one),
-//   budgets: {limits:{iterations,toolCalls,tokens,wallMs}, used:{...}}  (0 or null limit = unlimited).
+//   budgets: {limits:{iterations,toolCalls,tokens,wallMs}, used:{...}}  (0 or null limit = unlimited),
+//   apiAllow: [{host, paths:["/repos/"]}]  the hosts and path prefixes the read-only `api` class may GET (none = every api call is denied),
+//   mcpServers: {<name>: {trusted, descriptorHash, tools:[names], approval:{descriptorHash, tools:[names]}|null}}  the current state of each
+//     MCP server (the caller computes the descriptor hash from the definition AND the advertised tool list; see tools/descriptor.mjs).
 //
 // Policy can only turn an operation tag (commit / push-branch / open-pr) from "ask" into "allow" in autonomous
 // mode. It never affects deny, DEFAULT_BRANCH_PUSH, merge, deploy, publish or network findings. In autonomous mode
@@ -59,7 +62,7 @@ export const REASONS = Object.freeze([
 ]);
 
 /** Tool names an action may use. */
-export const TOOLS = Object.freeze(["shell", "read", "write", "edit", "git", "merge", "deploy"]);
+export const TOOLS = Object.freeze(["shell", "read", "write", "edit", "git", "merge", "deploy", "api", "mcp"]);
 
 const DECISION_RANK = Object.freeze({ allow: 0, "require-approval": 1, deny: 2, unavailable: 2 });
 const DENY_ORDER = ["DESTRUCTIVE_COMMAND", "APPROVAL_SELF_GRANT", "PROTECTED_PATH", "SECRET_ACCESS", "PATH_OUTSIDE_WORKSPACE"];
@@ -180,6 +183,87 @@ function gitCommand(input) {
   return null;
 }
 
+const API_METHOD = "GET";
+const API_KEYS = new Set(["tool", "method", "url", "args"]);
+const MCP_KEYS = new Set(["server", "tool", "args"]);
+const MCP_SERVER_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
+const MCP_TOOL_NAME = /^[A-Za-z0-9_.-]{1,64}$/;
+
+/** Unknown input keys, or null. Names only, never values. */
+const unexpectedKey = (input, allowed) => Object.keys(input).find((key) => !allowed.has(key)) ?? null;
+
+/**
+ * `api`: a read-only GET of an https URL on an allow-listed host and path prefix. Anything else (another method, another
+ * host, a port that is not listed, userinfo, a fragment, an encoded or dot path segment) is denied in every mode; there is
+ * no write adapter. It never asks for approval: the allow-list is the user's configuration, not a per-call decision.
+ */
+function decideApi(input, ctx) {
+  const deny = (reason, ruleId, message) => makeDecision("deny", reason, ruleId, { message, mutating: false, operations: [], findings: [] });
+  const extra = unexpectedKey(input, API_KEYS);
+  if (extra !== null) return deny("TOOL_NOT_ALLOWED", "invalid-api-input", "the api tool input has an unexpected field");
+  const method = input.method ?? API_METHOD;
+  if (method !== API_METHOD) return deny("TOOL_NOT_ALLOWED", "api-method-not-get", "the api tool is read-only: only GET is allowed");
+  if (typeof input.url !== "string" || input.url === "" || input.url.length > 2048 || /[\x00-\x20\x7f-\x9f\\]/.test(input.url)) {
+    return deny("TOOL_NOT_ALLOWED", "invalid-api-url", "the api tool needs a plain https URL");
+  }
+  let url;
+  try {
+    url = new URL(input.url);
+  } catch {
+    return deny("TOOL_NOT_ALLOWED", "invalid-api-url", "the api tool needs a plain https URL");
+  }
+  if (url.protocol !== "https:" || url.username !== "" || url.password !== "" || url.hash !== "" || input.url.includes("#")) {
+    return deny("NETWORK_EGRESS", "api-url-shape", "only plain https URLs without credentials or fragments are allowed");
+  }
+  if (/%(?:2e|2f|5c)/i.test(url.pathname) || url.pathname.split("/").some((segment) => segment === "." || segment === "..")) {
+    return deny("NETWORK_EGRESS", "api-path-encoded", "the URL path holds dot or encoded separator segments");
+  }
+  const rules = Array.isArray(ctx.apiAllow) ? ctx.apiAllow : [];
+  const rule = rules.find((entry) => typeof entry?.host === "string" && entry.host.toLowerCase() === url.host && Array.isArray(entry.paths) && entry.paths.some((prefix) => typeof prefix === "string" && prefix.startsWith("/") && url.pathname.startsWith(prefix)));
+  if (!rule) return deny("NETWORK_EGRESS", "api-host-not-allowed", `the host or path of this request is not on the api allow-list`);
+  return allow({ message: "read-only request to an allow-listed API host", mutating: false, operations: [], findings: [] });
+}
+
+/**
+ * `mcp`: a call to a tool of an MCP server. Allowed only when the server is trusted AND a per-server approval binds the CURRENT
+ * descriptor hash (definition + advertised tool list) AND the tool is in the approved list. A changed definition or tool list makes the
+ * approval stale. The tool's effects are unknown (its annotations are untrusted), so a call counts as mutating (needs the run lock).
+ */
+function decideMcp(input, ctx) {
+  const base = { mutating: true, operations: [], findings: [] };
+  const deny = (reason, ruleId, message) => makeDecision("deny", reason, ruleId, { ...base, message });
+  const extra = unexpectedKey(input, MCP_KEYS);
+  if (extra !== null) return deny("TOOL_NOT_ALLOWED", "invalid-mcp-input", "the mcp tool input has an unexpected field");
+  if (typeof input.server !== "string" || !MCP_SERVER_NAME.test(input.server) || typeof input.tool !== "string" || !MCP_TOOL_NAME.test(input.tool)) {
+    return deny("TOOL_NOT_ALLOWED", "invalid-mcp-input", "the mcp tool needs a valid server name and tool name");
+  }
+  const servers = ctx.mcpServers !== null && typeof ctx.mcpServers === "object" ? ctx.mcpServers : {};
+  const state = Object.hasOwn(servers, input.server) ? servers[input.server] : null;
+  if (state === null || typeof state !== "object") return deny("TOOL_NOT_ALLOWED", "mcp-server-unknown", "this MCP server is not configured");
+  if (state.trusted !== true) {
+    return makeDecision("require-approval", "OUT_OF_POLICY_OPERATION", "mcp-server-untrusted", { ...base, message: "the repository that defines this MCP server is not trusted; run `asterweave trust grant` and `asterweave mcp test` first" });
+  }
+  if (typeof state.descriptorHash !== "string" || !/^[0-9a-f]{64}$/.test(state.descriptorHash)) return deny("TOOL_NOT_ALLOWED", "mcp-descriptor-missing", "the server descriptor is not known");
+  // '/' separators: the redactor rewrites `name=value` shapes, and the approval target must display faithfully.
+  const scope = { operation: "mcp-server", target: `mcp/${input.server}/${state.descriptorHash}` };
+  const stored = state.approval !== null && typeof state.approval === "object" ? state.approval : null;
+  const storedValid = stored !== null && stored.descriptorHash === state.descriptorHash;
+  const scoped = approved(ctx, scope);
+  if (!storedValid && !scoped) {
+    const stale = stored !== null;
+    return makeDecision("require-approval", stale ? "STALE_APPROVAL" : "OUT_OF_POLICY_OPERATION", stale ? "mcp-approval-stale" : "mcp-approval-missing", {
+      ...base,
+      message: stale ? "the server definition or its tool list changed since it was approved" : "this MCP server has not been approved",
+      scope,
+      scopes: [scope],
+    });
+  }
+  const allowed = storedValid ? stored.tools : state.tools;
+  if (!Array.isArray(allowed) || !allowed.includes(input.tool)) return deny("TOOL_NOT_ALLOWED", "mcp-tool-not-approved", "this tool is not in the approved list of the server");
+  if (storedValid) return allow({ ...base, message: "trusted MCP server with a valid approval", scopes: [] });
+  return makeDecision("allow", "APPROVED", "scoped-approval", { ...base, message: "the MCP server has a valid scoped approval", scopes: [scope] });
+}
+
 /**
  * Evaluate one action. Never throws: any internal failure is `unavailable` / GUARD_UNAVAILABLE.
  *
@@ -209,6 +293,10 @@ export function evaluate(action, ctx) {
         if (command === null) return makeDecision("deny", "TOOL_NOT_ALLOWED", "invalid-git-input", { message: "the git tool needs an args array of strings" });
         return decideFindings(classifyShell(command, classifierOptions(ctx, input, { synthesized: Array.isArray(input.args) })), { ctx, mode, target: command });
       }
+      case "api":
+        return decideApi(input, ctx);
+      case "mcp":
+        return decideMcp(input, ctx);
       case "read":
         return pathAccess(ctx, mode, input.path ?? input.file_path, { writer: false, operationName: "read" });
       case "write":

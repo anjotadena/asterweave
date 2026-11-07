@@ -54,6 +54,8 @@ function hasExecutableConfig(repo, fs) {
 }
 
 function displayValue(key, value) {
+  if (value === null) return "(unset)";
+  if (Array.isArray(value) && value.every((item) => typeof item === "string")) return value.join(",");
   if (key === "qualityGates.required" && Array.isArray(value)) {
     return value.length === 0 ? "[]" : `[${value.length} gate(s): ${value.map((gate) => gate?.id).join(", ")}]`;
   }

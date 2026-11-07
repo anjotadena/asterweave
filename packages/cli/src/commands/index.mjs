@@ -18,8 +18,11 @@ import { doctorCommand, doctorCommandMeta } from "./doctor.mjs";
 import { COMMAND_HELP, helpCommand, helpCommandMeta } from "./help.mjs";
 import { hookCommand, hookCommandMeta } from "./hook.mjs";
 import { repoCommand, repoCommandMeta } from "./repo.mjs";
+import { mcpCommand, mcpCommandMeta } from "./mcp.mjs";
+import { modelCommand, modelCommandMeta } from "./model.mjs";
 import { runCommand, runCommandMeta } from "./run.mjs";
 import { trustCommand, trustCommandMeta } from "./trust.mjs";
+import { usageCommand, usageCommandMeta } from "./usage.mjs";
 
 /** Load commands/launch.mjs lazily; `null` when the module is not present in this build. */
 export async function defaultLoadLaunch() {
@@ -67,6 +70,9 @@ export function registerAllCommands(registry, { loadLaunch } = {}) {
   add("config", configCommand, configCommandMeta);
   add("trust", trustCommand, trustCommandMeta);
   add("run", runCommand, runCommandMeta);
+  add("usage", usageCommand, usageCommandMeta);
+  add("model", modelCommand, modelCommandMeta);
+  add("mcp", mcpCommand, mcpCommandMeta);
   add("hook", hookCommand, hookCommandMeta);
   return registry;
 }

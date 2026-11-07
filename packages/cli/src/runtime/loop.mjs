@@ -49,8 +49,9 @@ import { GraphError, graphHash, initialRun, transition } from "./graph.mjs";
 import { evaluateAdvancement, evaluateDispatch, evaluateMutation, evaluateResume, evaluateRetry, isBlocking, makeDecision } from "./guard.mjs";
 import { appendEvent, createRun, loadRun, repairTail } from "./ledger.mjs";
 import { acquireRunLock } from "./lock.mjs";
-import { DEFAULT_POLICY, effectiveMode, policyHash as hashPolicy, resolveBudgets } from "./policy.mjs";
+import { DEFAULT_POLICY, effectiveMode, policyHash as hashPolicy, resolveBudgets, resolveNodeBudgets } from "./policy.mjs";
 import { HOOK_EVENTS, runHooks as defaultRunHooks } from "./hooks.mjs";
+import { aggregateUsage, buildUsageEvent, eventTotal, hasMeasuredTotal, normalizeUsageReport, toolCallsByNode } from "./usage.mjs";
 
 export const MAX_REASKS = 2;
 export const DEFAULT_STEP_MS = 120_000;
@@ -109,6 +110,11 @@ export function applyLoopEvent(run, event) {
       const next = structuredClone(run);
       next.policyHash = event.to ?? null;
       return next;
+    }
+    case "usage": {
+      // The cumulative token counter (the one budgets use). An event that measured no total adds nothing: unknown is never 0.
+      const total = eventTotal(event);
+      return total === null ? run : withUsed(run, { tokens: (run.budgets?.used?.tokens ?? 0) + total });
     }
     case "run.rewound": {
       const next = structuredClone(run);
@@ -282,12 +288,13 @@ export function commitRecords(env, run, records) {
 
 /**
  * Create a run directory for a graph. Convenience over initialRun + ledger.createRun.
- * @param {{graph: object, goal: string, repo: {key: string, realpath: string}, runId: string, policyHash?: string|null, now?: () => string}} options
+ * @param {{graph: object, goal: string, repo: {key: string, realpath: string}, runId: string, policyHash?: string|null, routing?: object|null, now?: () => string}} options
  *   plus any ledger options (env, platform, homedir, fs).
  * @returns {{dir: string, run: object}}
  */
-export function createRunForGraph({ graph, goal, repo, runId, policyHash = null, now = isoNow, ...ledgerOptions }) {
+export function createRunForGraph({ graph, goal, repo, runId, policyHash = null, routing = null, now = isoNow, ...ledgerOptions }) {
   const run = initialRun(graph, { runId, goal, repo, now: now(), policyHash });
+  if (routing !== null) run.routing = routing; // pinned model route (routing.mjs pinRouting); absent on older runs
   return createRun(repo.key, run, { ...ledgerOptions, now });
 }
 
@@ -424,6 +431,9 @@ class Session {
     this.policy = options.policy ?? structuredClone(DEFAULT_POLICY);
     this.policyHash = options.policyHash ?? hashPolicy(this.policy);
     this.limits = { ...resolveBudgets(this.policy), ...(options.budgets ?? {}) };
+    this.nodeLimits = { ...resolveNodeBudgets(this.policy), ...(options.nodeBudgets ?? {}) };
+    this.nodeTokens = Object.create(null); // per-node cumulative tokens (measured only); rebuilt from the ledger at start
+    this.nodeCalls = Object.create(null); // per-node tool calls started
     this.hooks = Array.isArray(options.hooks) ? options.hooks : (options.hooks?.hooks ?? []);
     this.runHooks = options.runHooks ?? defaultRunHooks;
     this.stepMs = options.stepMs ?? DEFAULT_STEP_MS;
@@ -629,15 +639,32 @@ class Session {
     if (iterations > 0 && used.iterations >= iterations) return { name: "iterations", used: used.iterations, limit: iterations };
     if (wallMs > 0 && used.wallMs >= wallMs) return { name: "wallMs", used: used.wallMs, limit: wallMs };
     if (tokens > 0 && typeof used.tokens === "number" && used.tokens >= tokens) return { name: "tokens", used: used.tokens, limit: tokens };
+    return this.nodeBudget();
+  }
+
+  /**
+   * The per-node budgets (policy `autonomous.budgets.perNode`) of the current node. Tokens count measured usage only.
+   * Iterations are per attempt and reset when the node is entered, so a resume check (`resume: true`) skips them.
+   */
+  nodeBudget({ resume = false } = {}) {
+    const node = this.run.currentNode;
+    const limits = this.nodeLimits;
+    const used = this.run.budgets.used;
+    if (!resume && limits.iterations > 0 && used.iterations >= limits.iterations) return { scope: "node", name: "iterations", used: used.iterations, limit: limits.iterations };
+    const calls = this.nodeCalls[node] ?? 0;
+    if (limits.toolCalls > 0 && calls >= limits.toolCalls) return { scope: "node", name: "toolCalls", used: calls, limit: limits.toolCalls };
+    const tokens = this.nodeTokens[node];
+    if (limits.tokens > 0 && typeof tokens === "number" && tokens >= limits.tokens) return { scope: "node", name: "tokens", used: tokens, limit: limits.tokens };
     return null;
   }
 
   async blockForBudget(hit, pendingAction) {
+    const scope = hit.scope ?? "run";
     this.stopReason = "BUDGET_EXHAUSTED";
-    this.append({ type: "budget.exhausted", scope: "run", budget: hit.name, value: hit.used, limit: hit.limit, node: this.run.currentNode });
+    this.append({ type: "budget.exhausted", scope, budget: hit.name, value: hit.used, limit: hit.limit, node: this.run.currentNode });
     if (this.run.nodes[this.run.currentNode].status !== "running") await this.commit({ type: "enter" });
     if (this.run.status === "active" && this.run.nodes[this.run.currentNode].status === "running") {
-      await this.commit({ type: "complete", outcome: "blocked", signature: `budget:${hit.name}` }, { step: pendingAction?.step });
+      await this.commit({ type: "complete", outcome: "blocked", signature: scope === "node" ? `budget:node.${hit.name}` : `budget:${hit.name}` }, { step: pendingAction?.step });
     }
   }
 
@@ -666,7 +693,10 @@ class Session {
     const completed = completeInterruptedGroup(this.env(), this.run, loaded.events);
     this.run = completed.run;
     if (completed.seq !== null) this.seq = completed.seq;
-    if (this.run.budgets.used.tokens === 0) this.patchUsed({ tokens: null });
+    // A 0 token counter from run creation means "nothing reported yet"; once the ledger holds a measured total it is a real 0.
+    if (this.run.budgets.used.tokens === 0 && !hasMeasuredTotal(loaded.events)) this.patchUsed({ tokens: null });
+    for (const [node, bucket] of Object.entries(aggregateUsage(loaded.events).byNode)) if (bucket.tokens !== null) this.nodeTokens[node] = bucket.tokens;
+    Object.assign(this.nodeCalls, toolCallsByNode(loaded.events));
   }
 
   /** Decide whether the run may continue. Returns false when it must stop right here. */
@@ -730,6 +760,14 @@ class Session {
     if (decision.decision !== "allow") {
       this.stopReason = decision.reason;
       this.exitOverride = decision.decision === "require-approval" ? EXIT.APPROVAL_REQUIRED : decision.reason === "BUDGET_EXHAUSTED" ? EXIT.ERROR : EXIT.POLICY_DENIED;
+      return false;
+    }
+    // The guard only knows the run-level budgets: a node still over its own budget is refused the same way.
+    const nodeHit = this.nodeBudget({ resume: true });
+    if (nodeHit) {
+      this.recordDecision("resume", makeDecision("deny", "BUDGET_EXHAUSTED", `budget-node-${nodeHit.name}`, { message: `the ${nodeHit.name} budget of node '${this.run.currentNode}' is exhausted (${nodeHit.used}/${nodeHit.limit})`, budget: nodeHit }));
+      this.stopReason = "BUDGET_EXHAUSTED";
+      this.exitOverride = EXIT.ERROR;
       return false;
     }
     await this.commit({ type: "resume" });
@@ -900,11 +938,12 @@ class Session {
       const observation = await abortable(this.executor.observe(ctx), signal);
       raw = await abortable(this.executor.decide(ctx, observation), signal);
     } catch (error) {
+      this.recordUsage(ctx); // an executor that failed or was cut off may still have used tokens
       if (this.userAborted()) return;
       return this.reject(step, attempt, [error?.name === "TimeoutError" ? "executor: the step deadline was exceeded" : "executor: failed to produce an action"]);
     }
-    if (this.userAborted()) return;
     this.recordUsage(ctx);
+    if (this.userAborted()) return;
     const verdict = validateAction(raw);
     if (!verdict.ok) return this.reject(step, attempt, verdict.errors);
 
@@ -923,14 +962,30 @@ class Session {
     return this.perform({ ...this.cursor.pending, delayMs: hints.delayMs }, signal);
   }
 
+  /**
+   * Record what the executor says it used as a `usage` event (applyLoopEvent adds its total to the token counter).
+   * The executor is untrusted: a report with unknown fields or out-of-range values is rejected as a whole
+   * (`usage.rejected`, paths only) and counts for nothing; a report that measured nothing records nothing.
+   */
   recordUsage(ctx) {
-    let usage = null;
+    let raw = null;
     try {
-      usage = this.executor.usage?.(ctx) ?? null;
+      raw = this.executor.usage?.(ctx) ?? null;
     } catch {
-      usage = null;
+      raw = null;
     }
-    if (Number.isFinite(usage?.tokens) && usage.tokens >= 0) this.patchUsed({ tokens: (this.run.budgets.used.tokens ?? 0) + usage.tokens });
+    if (raw === null) return;
+    const node = this.run.currentNode;
+    const verdict = normalizeUsageReport(raw);
+    if (!verdict.ok) {
+      this.append({ type: "usage.rejected", node, attempt: ctx.attempt, errors: verdict.errors.map((message) => cap(message, 200)) });
+      return;
+    }
+    const event = buildUsageEvent({ node, attempt: ctx.attempt, source: "executor", report: verdict.report });
+    if (event === null) return;
+    this.append(event);
+    const total = eventTotal(event);
+    if (total !== null) this.nodeTokens[node] = (this.nodeTokens[node] ?? 0) + total;
   }
 
   async resumePending(pending, signal) {
@@ -1025,6 +1080,7 @@ class Session {
     const { action } = pending;
     if (this.userAborted()) return;
     this.patchUsed({ toolCalls: this.run.budgets.used.toolCalls + 1 });
+    this.nodeCalls[pending.node] = (this.nodeCalls[pending.node] ?? 0) + 1;
     this.append({ type: "action.started", node: pending.node, step: pending.step, attempt: pending.attempt, key: pending.key });
     const ctx = { runId: this.run.runId, node: pending.node, attempt: pending.attempt, step: pending.step, key: pending.key, signal, sleep: this.sleep, delayMs: pending.delayMs, workspaceRoot: this.o.workspaceRoot ?? this.run.repo.realpath };
     let result;
