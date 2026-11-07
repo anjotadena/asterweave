@@ -4,6 +4,7 @@
 import path from "node:path";
 import { CliError, EXIT, UsageError } from "../exit-codes.mjs";
 import { connectRepository, isRepositoryName, listBranches, listRepositories, repoStatus, resolveCloneOrigin } from "../repo.mjs";
+import { stringifyJson } from "../json.mjs";
 import { sanitizeForTerminal } from "../redact.mjs";
 import { createStyle, frame, renderPicker, renderStrip } from "../tui/render.mjs";
 import { pickOne, withTerminal } from "../tui/session.mjs";
@@ -75,7 +76,7 @@ async function connect(ctx) {
 
   const result = await connectRepository({ repository, branch, path: clonePath, ...options });
   if (json) {
-    write(ctx.stdout, `${JSON.stringify({ ok: true, repository: result.repository, branch: result.branch, path: result.path, runner: "local" })}\n`);
+    write(ctx.stdout, `${stringifyJson({ ok: true, repository: result.repository, branch: result.branch, path: result.path, runner: "local" })}\n`);
     return EXIT.OK;
   }
   const style = createStyle({ env: ctx.env, isTTY: Boolean(ctx.stdout?.isTTY) });
@@ -190,7 +191,7 @@ async function status(ctx) {
   if (result.warning && !json) write(ctx.stderr, `Warning: ${sanitizeForTerminal(result.warning)}
 `);
   if (json) {
-    write(ctx.stdout, `${JSON.stringify(result)}\n`);
+    write(ctx.stdout, `${stringifyJson(result)}\n`);
     return result.ok ? EXIT.OK : EXIT.ERROR;
   }
   if (!result.connected) {

@@ -157,7 +157,7 @@ Run `/asterweave:scaffold` when adopting a repository or when its architecture/t
 
 ### CLI (preview)
 
-`packages/cli` is a zero-dependency Node 22+ command-line interface that is not published to npm yet. Run it from a clone with `node packages/cli/bin/asterweave.mjs doctor`.
+`packages/cli` is a zero-dependency Node 22+ command-line interface that is not published to npm yet. Run it from a clone with `node packages/cli/bin/asterweave.mjs doctor`. Its tests (`npm run test:cli`) also need Node 22+ (the repository root still allows Node 18 for the plugin scripts); the runner stops with a clear message on an older Node.
 **[CLI documentation →](https://anjotadena.github.io/asterweave/cli/overview)**
 
 ---

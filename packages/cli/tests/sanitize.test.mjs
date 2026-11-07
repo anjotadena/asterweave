@@ -86,7 +86,7 @@ test("a real doctor run with a hostile config.valid reason prints no control byt
 // --- real subprocess ------------------------------------------------------------------------------
 
 const binPath = fileURLToPath(new URL("../bin/asterweave.mjs", import.meta.url));
-const root = realpathSync(mkdtempSync(join(tmpdir(), "aw-sanitize-")));
+const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aw-sanitize-")));
 after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
 let nextId = 0;
 

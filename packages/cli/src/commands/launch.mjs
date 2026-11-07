@@ -9,6 +9,7 @@
 import path from "node:path";
 import { loginClaude, loginGithub, probeClaude, probeGithub } from "../auth/index.mjs";
 import { CliError, EXIT, UsageError } from "../exit-codes.mjs";
+import { quoteArg } from "../redact.mjs";
 import { connectRepository, repoStatus } from "../repo.mjs";
 import { classifyExecutableConfig } from "../trust.mjs";
 import { createStyle } from "../tui/render.mjs";
@@ -136,7 +137,10 @@ export async function launchCommand(ctx) {
     warnings.push(model.code === "CLAUDE_NOT_AUTHENTICATED" ? "Model provider: not signed in — run: asterweave auth login model" : `Model provider: ${model.reason}`);
   }
   if (repo.trust && !repo.trust.trusted && hasExecutableConfig(repo.path, ctx.fs)) {
-    warnings.push(`Repository config not trusted — run: asterweave trust grant --path ${/\s/.test(repo.path) ? `"${repo.path}"` : repo.path}`);
+    const quoted = quoteArg(repo.path);
+    warnings.push(`Repository config not trusted — run: asterweave trust grant --path ${quoted ?? "<path>"}`);
+    // A path that cannot be quoted safely for cmd/PowerShell is never embedded in the command line.
+    if (quoted === null) warnings.push("where <path> is the following path (quote this path for your shell):", repo.path);
   }
   const banner = buildBannerLines({
     account: github.account ?? "unknown",
@@ -160,6 +164,6 @@ function hasExecutableConfig(repoPath, fs) {
   try {
     return classifyExecutableConfig(repoPath, fs ? { fs } : undefined).length > 0;
   } catch {
-    return false;
+    return true; // cannot inspect the repository: fail closed, show the trust warning
   }
 }

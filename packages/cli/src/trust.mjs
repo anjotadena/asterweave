@@ -6,11 +6,12 @@
 // trust.json (in the user directory): { "<realpath>": { "sha256": "<hex>", "trustedAt": "<iso>" } }
 // Keys are the repository realpath (lower-cased on win32, where the filesystem is case-insensitive).
 
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import * as nodeFs from "node:fs";
 import path from "node:path";
 import { CliError, EXIT } from "./exit-codes.mjs";
 import { userFilePath } from "./paths.mjs";
+import { suggestCommand } from "./redact.mjs";
 import { readJson, StoreError, writeJsonAtomic } from "./store.mjs";
 
 /** Files whose bytes decide trust, relative to the repository root. Order is part of the hash. */
@@ -193,6 +194,181 @@ function readStoreForUpdate(file, fs) {
   return { store: {}, recreated: true };
 }
 
+// Store lock ------------------------------------------------------------------------------------
+//
+// grant/revoke are read-modify-write on one file shared by every repository, so two processes granting
+// different repositories at once could each read the old store and the second rename would drop the
+// first entry. A sidecar lock (`trust.json.lock`, created exclusively with flag 'wx') serialises them.
+// It records the owner's pid, a timestamp and a random token; it is released in a finally block and
+// only if the token is still ours. A lock older than LOCK_STALE_MS belongs to a process that died and is
+// taken over. Waiting is bounded (LOCK_TIMEOUT_MS) and ends in a typed TRUST_STORE_BUSY error.
+
+const LOCK_TIMEOUT_MS = 2000;
+const LOCK_STALE_MS = 30_000;
+const LOCK_BACKOFF_MS = [5, 10, 20, 40, 80, 160];
+// Creating the lock fails with EEXIST when it is held. On Windows an antivirus scanner or a pending
+// delete also surfaces as EPERM/EBUSY; on POSIX EPERM is a real permission problem, never contention.
+const CONTENTION_WIN32 = new Set(["EEXIST", "EPERM", "EBUSY"]);
+const CONTENTION_POSIX = new Set(["EEXIST", "EBUSY"]);
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/** Text of the lock file, or null when it is gone. Any other error propagates (the lock is "held"). */
+function readLock(lockFile, fs) {
+  try {
+    return fs.readFileSync(lockFile, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+function lockBusyError(lockFile, message, cause, platform) {
+  return new CliError(message, {
+    code: "TRUST_STORE_BUSY",
+    exitCode: EXIT.ERROR,
+    remediation: `Retry in a moment. If no other asterweave command is running, ${suggestCommand("remove the stale lock file ", lockFile, " and retry.", platform)}`,
+    cause,
+  });
+}
+
+/**
+ * Look at a lock that blocked us and remove it when its owner is gone.
+ * Returns "removed" (a stale lock was removed), "gone" (it vanished) or "held" (a live lock, or one we
+ * could not judge). The caller waits and tries to create the lock again in every case. Nothing is
+ * concluded from an error other than ENOENT: an unreadable lock is a held lock. Throws
+ * TRUST_STORE_BUSY for a lock path that is not a regular file (a directory or link we never created).
+ */
+function inspectLock(lockFile, { fs, now, staleMs, token, platform }) {
+  let info;
+  try {
+    info = fs.lstatSync(lockFile);
+  } catch (error) {
+    return error?.code === "ENOENT" ? "gone" : "held";
+  }
+  if (!info.isFile()) {
+    throw lockBusyError(lockFile, `The trust store lock ${lockFile} exists but is not a regular file, so it is not a lock Asterweave created.`, undefined, platform);
+  }
+  let text;
+  try {
+    text = readLock(lockFile, fs);
+  } catch {
+    return "held";
+  }
+  if (text === null) return "gone";
+  let acquiredAt;
+  try {
+    acquiredAt = JSON.parse(text)?.at;
+  } catch {
+    // An unparseable lock falls back to the file's modification time below.
+  }
+  if (typeof acquiredAt !== "number") acquiredAt = info.mtimeMs;
+  if (now() - acquiredAt <= staleMs) return "held";
+  // Re-check the content right before moving it: a different text means someone replaced the lock.
+  try {
+    if (readLock(lockFile, fs) !== text) return "held";
+  } catch {
+    return "held";
+  }
+  // Move it aside, then VERIFY what was moved. The check above and the rename are not atomic: another
+  // taker may have removed the stale lock and created its own LIVE one in between, and rename moves
+  // whatever sits at the path. If the moved file is not the stale text, put it back with a hard link
+  // (which, unlike rename, fails if the path has been taken again) and do not acquire.
+  const aside = `${lockFile}.stale-${token}`;
+  try {
+    fs.renameSync(lockFile, aside);
+  } catch (error) {
+    return error?.code === "ENOENT" ? "gone" : "held";
+  }
+  let moved = null;
+  try {
+    moved = readLock(aside, fs);
+  } catch {
+    // Unreadable copy: treated like a different text below (restored, not removed).
+  }
+  if (moved !== text) {
+    try {
+      fs.linkSync(aside, lockFile);
+    } catch {
+      // The path is taken again by a newer lock; the displaced one cannot be restored over it.
+    }
+    try {
+      fs.unlinkSync(aside);
+    } catch {
+      // Best effort: a leftover `.stale-*` file is harmless.
+    }
+    return "held";
+  }
+  try {
+    fs.unlinkSync(aside);
+  } catch {
+    // Best effort: a leftover `.stale-*` file is harmless.
+  }
+  return "removed";
+}
+
+/**
+ * Run `fn` while holding the trust store lock. Always releases it (when it is still ours).
+ *
+ * Every failed attempt sleeps its backoff and counts toward the wait, whatever the lock looks like, so
+ * a lock that can be neither created nor read still ends in TRUST_STORE_BUSY within the timeout. Two
+ * processes taking over the same stale lock are not separated by the rename alone: `inspectLock`
+ * verifies what it moved and restores a live lock it displaced. A narrow window remains in which the
+ * restored lock is briefly absent, so this is a best-effort guard for crash recovery, not a mutex.
+ * @template T
+ * @param {string} file  trust.json path
+ * @param {TrustOptions & {sleep?: (ms: number) => void, lockTimeoutMs?: number, lockStaleMs?: number, lockNow?: () => number}} options
+ * @param {() => T} fn
+ * @returns {T}
+ * @throws {CliError} TRUST_STORE_BUSY (exit 1) when the lock stays held for the whole wait
+ */
+function withStoreLock(file, options, fn) {
+  const fs = options.fs ?? nodeFs;
+  const sleep = options.sleep ?? sleepSync;
+  const now = options.lockNow ?? Date.now;
+  const timeoutMs = options.lockTimeoutMs ?? LOCK_TIMEOUT_MS;
+  const staleMs = options.lockStaleMs ?? LOCK_STALE_MS;
+  const platform = options.platform ?? process.platform;
+  const contention = platform === "win32" ? CONTENTION_WIN32 : CONTENTION_POSIX;
+  const lockFile = `${file}.lock`;
+  const token = randomBytes(8).toString("hex");
+  const body = JSON.stringify({ pid: process.pid, at: now(), token });
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  } catch {
+    // The write below reports an unusable directory with the proper error.
+  }
+  let waited = 0;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      fs.writeFileSync(lockFile, body, { flag: "wx", mode: 0o600 });
+      break;
+    } catch (error) {
+      if (!contention.has(error?.code)) {
+        throw new StoreError(`Cannot lock ${file}: ${error?.message ?? error}`, { file, reason: "WRITE_FAILED", cause: error });
+      }
+      inspectLock(lockFile, { fs, now, staleMs, token, platform });
+      if (waited >= timeoutMs) {
+        throw lockBusyError(lockFile, `The trust store ${file} is being updated by another Asterweave process (waited ${timeoutMs} ms).`, error, platform);
+      }
+      const delay = Math.min(LOCK_BACKOFF_MS[Math.min(attempt, LOCK_BACKOFF_MS.length - 1)], timeoutMs - waited);
+      sleep(delay);
+      waited += delay;
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    try {
+      if (JSON.parse(readLock(lockFile, fs) ?? "null")?.token === token) fs.unlinkSync(lockFile);
+    } catch {
+      // The lock is gone or no longer ours; nothing to release.
+    }
+  }
+}
+
 /**
  * Trust the repository in its current state (records the current hash).
  * @param {string} repoPath
@@ -207,14 +383,16 @@ export function grantTrust(repoPath, options = {}) {
     throw new CliError(`The trust-governing files of ${computed.realpath} changed after they were reviewed; trust was not granted.`, {
       code: "TRUST_CHANGED_DURING_GRANT",
       exitCode: EXIT.ERROR,
-      remediation: `Review the repository config again, then rerun trust grant: asterweave trust grant --path "${computed.realpath}"`,
+      remediation: suggestCommand("Review the repository config again, then rerun trust grant: asterweave trust grant --path ", computed.realpath),
     });
   }
   const file = trustFilePath(options);
-  const { store: next } = readStoreForUpdate(file, options.fs);
   const trustedAt = (options.now ?? (() => new Date().toISOString()))();
-  next[computed.key] = { sha256: computed.hash, trustedAt };
-  writeJsonAtomic(file, next, options.fs ? { fs: options.fs } : undefined);
+  withStoreLock(file, options, () => {
+    const { store: next } = readStoreForUpdate(file, options.fs);
+    next[computed.key] = { sha256: computed.hash, trustedAt };
+    writeJsonAtomic(file, next, options.fs ? { fs: options.fs } : undefined);
+  });
   return { trusted: true, realpath: computed.realpath, hash: computed.hash, trustedAt };
 }
 
@@ -229,10 +407,13 @@ export function grantTrust(repoPath, options = {}) {
 export function revokeTrust(repoPath, options = {}) {
   const computed = computeTrustHash(repoPath, options);
   const file = trustFilePath(options);
-  const { store: next, recreated } = readStoreForUpdate(file, options.fs);
-  const removed = Object.hasOwn(next, computed.key);
-  if (removed) delete next[computed.key];
-  if (removed || recreated) writeJsonAtomic(file, next, options.fs ? { fs: options.fs } : undefined);
+  const { removed, recreated } = withStoreLock(file, options, () => {
+    const { store: next, recreated: replaced } = readStoreForUpdate(file, options.fs);
+    const had = Object.hasOwn(next, computed.key);
+    if (had) delete next[computed.key];
+    if (had || replaced) writeJsonAtomic(file, next, options.fs ? { fs: options.fs } : undefined);
+    return { removed: had, recreated: replaced };
+  });
   return { trusted: false, realpath: computed.realpath, hash: computed.hash, removed, recreated };
 }
 
@@ -250,17 +431,51 @@ export function assertTrusted(repoPath, purpose, options = {}) {
   throw new TrustError(`Cannot ${purpose}: repository ${status.realpath} is untrusted (${why}).`, {
     repoPath: status.realpath,
     status,
-    remediation: `Review .claude/asterweave.json, .claude/settings*.json and .mcp.json, then run: asterweave trust grant --path "${status.realpath}"`,
+    remediation: suggestCommand("Review .claude/asterweave.json, .claude/settings*.json and .mcp.json, then run: asterweave trust grant --path ", status.realpath),
   });
+}
+
+/** Quality-gate command findings in the text of .claude/asterweave.json (none when it does not parse). */
+function gateFindings(text) {
+  const found = [];
+  try {
+    const gates = JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text)?.qualityGates?.required;
+    if (Array.isArray(gates)) {
+      gates.forEach((gate, index) => {
+        if (gate && typeof gate === "object" && "command" in gate) {
+          found.push({ field: `qualityGates.required[${index}].command`, file: ADAPTER_FILE, kind: "command" });
+        }
+      });
+    }
+  } catch {
+    // Unparseable adapter: config validation reports it; nothing executable can be read from it.
+  }
+  return found;
+}
+
+/**
+ * Executable-config findings derived from a trust status, i.e. from the very bytes (and file states)
+ * that went into its hash: no second read of the repository, so what a preview lists is exactly what
+ * a grant covers. A settings or MCP file that exists but cannot be read still counts as a finding.
+ * @param {{adapter?: {bytes: Buffer|null, state: string}, files: Array<{file: string, state: string}>}} status
+ * @returns {Array<{field: string, file: string, kind: 'command'|'settings'|'mcp'}>}
+ */
+export function classifyExecutableFromStatus(status) {
+  const found = [];
+  if (status.adapter?.state === "present" && status.adapter.bytes) found.push(...gateFindings(status.adapter.bytes.toString("utf8")));
+  const exists = (relative) => status.files.some((item) => item.file === relative && item.state !== "missing");
+  for (const relative of TRUST_FILES.slice(1, 3)) if (exists(relative)) found.push({ field: relative, file: relative, kind: "settings" });
+  if (exists(TRUST_FILES[3])) found.push({ field: TRUST_FILES[3], file: TRUST_FILES[3], kind: "mcp" });
+  return found;
 }
 
 /**
  * Which repository config can make code run. Pure inspection (no trust decision).
  *
  * - `qualityGates.required[i].command` in `.claude/asterweave.json`: shell commands Asterweave runs.
- * - `.claude/settings.json`, `.claude/settings.local.json`: presence means `claude` run in the
+ * - `.claude/settings.json`, `.claude/settings.local.json`: presence (even unreadable) means `claude` run in the
  *   repo loads hooks, env, helpers and permissions from it.
- * - `.mcp.json`: presence means `claude` run in the repo may start MCP servers.
+ * - `.mcp.json`: presence (even unreadable) means `claude` run in the repo may start MCP servers.
  *
  * @param {string} repoPath
  * @param {{fs?: typeof nodeFs}} [options]
@@ -269,25 +484,21 @@ export function assertTrusted(repoPath, purpose, options = {}) {
 export function classifyExecutableConfig(repoPath, { fs = nodeFs } = {}) {
   const root = (fs.realpathSync.native ?? fs.realpathSync)(path.resolve(repoPath));
   const found = [];
+  // Same notion as the hash and `classifyExecutableFromStatus`: anything but ENOENT/ENOTDIR counts as present
+  // (a directory or an unreadable file is a finding, fail-closed).
   const present = (relative) => {
     try {
-      return fs.statSync(path.join(root, ...relative.split("/"))).isFile();
-    } catch {
-      return false;
+      fs.statSync(path.join(root, ...relative.split("/")));
+      return true;
+    } catch (error) {
+      return !(error?.code === "ENOENT" || error?.code === "ENOTDIR");
     }
   };
   if (present(".claude/asterweave.json")) {
     try {
-      const gates = JSON.parse(fs.readFileSync(path.join(root, ".claude", "asterweave.json"), "utf8"))?.qualityGates?.required;
-      if (Array.isArray(gates)) {
-        gates.forEach((gate, index) => {
-          if (gate && typeof gate === "object" && "command" in gate) {
-            found.push({ field: `qualityGates.required[${index}].command`, file: ".claude/asterweave.json", kind: "command" });
-          }
-        });
-      }
+      found.push(...gateFindings(fs.readFileSync(path.join(root, ".claude", "asterweave.json"), "utf8")));
     } catch {
-      // Unparseable adapter: config validation reports it; nothing executable can be read from it.
+      // Unreadable adapter: config validation reports it; nothing executable can be read from it.
     }
   }
   for (const relative of [".claude/settings.json", ".claude/settings.local.json"]) {

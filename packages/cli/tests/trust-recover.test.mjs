@@ -159,7 +159,12 @@ test("reads never rewrite a corrupt trust.json (trust status, config show, docto
   assert.equal((await run(["config", "show", "--json", "--path", clone], sandbox)).code, 0);
   const doctor = JSON.parse((await run(["doctor", "--json"], sandbox, { cwd: clone })).out);
   assert.equal(doctor.checks.find((item) => item.id === "repo.trust").status, "WARN");
-  const rs = await run(["repo", "status", "--json"], sandbox, { cwd: clone, env: { ...process.env, ...sandbox.env } }); // real PATH: repo status runs git assert.equal(rs.code, 0, rs.out + rs.err);
+  // Real runCli with real git and the real PATH: the shared `run` helper injects a fake spawn/exists that only knows gh and claude.
+  const rsOut = sink();
+  const rsErr = sink();
+  const rsCode = await runCli(["repo", "status", "--json"], { stdout: rsOut, stderr: rsErr, stdin: sink(), env: { ...process.env, ASTERWEAVE_CONFIG_DIR: sandbox.userDir }, cwd: clone });
+  const rs = { code: rsCode, out: rsOut.text(), err: rsErr.text() };
+  assert.equal(rs.code, 0, rs.out + rs.err);
   assert.ok(readFileSync(store).equals(before), "the corrupt file is byte-for-byte unchanged after every read");
 });
 

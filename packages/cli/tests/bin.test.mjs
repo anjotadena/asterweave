@@ -16,7 +16,7 @@ import { FAKE_ANTHROPIC_KEY, FAKE_GH_TOKEN, TOKEN_SHAPED, claudeStatus, ghEntry,
 
 const binPath = fileURLToPath(new URL("../bin/asterweave.mjs", import.meta.url));
 const stubPath = fileURLToPath(new URL("./bin-stub.cjs", import.meta.url));
-const root = realpathSync(mkdtempSync(join(tmpdir(), "aw-bin-")));
+const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aw-bin-")));
 const emptyPath = join(root, "empty-path");
 const stubPathDir = join(root, "stub-path");
 let nextId = 0;

@@ -111,13 +111,16 @@ export function redactDeep(value) {
 // control sequence in it (OSC title/clipboard writes, CSI screen control, C1 controls) would be
 // interpreted by the user's terminal. `sanitizeForTerminal` is the ONE place that neutralises it.
 // Escape sequences are removed wholesale; any other control character becomes a visible `?`.
-// Newline and tab survive. JSON output needs none of this (JSON.stringify escapes controls).
+// Newline and tab survive. JSON output has its own writer (json.mjs: stringifyJson).
 //
-// Alternatives, in order: SGR colour (kept only on request), OSC/DCS/SOS/PM/APC strings (up to their
-// terminator), 8-bit OSC, CSI, any other two-byte ESC sequence, then single stray controls
-// (C0 except \n \t, DEL, C1) and bidirectional-override characters.
+// Alternatives, in order: SGR colour (kept only on request); string sequences (OSC/DCS/SOS/PM/APC,
+// 7-bit or 8-bit introducer) up to their terminator, which is BEL, ESC \ or the 8-bit ST (0x9c) --
+// or a newline, which is never consumed, so an unterminated sequence can hide at most the rest of
+// its own line; CSI; any other two-byte ESC sequence (never swallowing a newline); then single stray
+// controls (C0 except \n \t, DEL, C1) and bidirectional / line-separator characters.
+// A string sequence that ended without a terminator while more text follows leaves a visible `?`.
 const TERMINAL_UNSAFE =
-  /(\x1b\[[0-9;]*m)|\x1b[\]PX^_][^\x07\x1b]*(?:\x07|\x1b\\)?|\x9d[^\x07\x1b\x9c]*(?:\x07|\x1b\\|\x9c)?|\x1b\[[0-?]*[ -/]*[@-~]?|\x1b[\s\S]?|[\x00-\x08\x0b-\x1f\x7f-\x9f‪-‮⁦-⁩]/g;
+  /(\x1b\[[0-9;]*m)|((?:\x1b[\]PX^_]|[\x90\x98\x9d-\x9f])[^\x07\x1b\x9c\n]*(\x07|\x1b\\|\x9c)?)|\x1b\[[0-?]*[ -/]*[@-~]?|\x1b[^\n]?|[\x00-\x08\x0b-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
 
 /**
  * Make untrusted text safe to print to a terminal.
@@ -127,10 +130,76 @@ const TERMINAL_UNSAFE =
  * @returns {string}
  */
 export function sanitizeForTerminal(text, { allowSgr = false } = {}) {
-  return String(text ?? "").replace(TERMINAL_UNSAFE, (match, sgr) => {
+  return neutralise(String(text ?? ""), allowSgr, false);
+}
+
+function neutralise(text, allowSgr, markTail) {
+  return text.replace(TERMINAL_UNSAFE, (match, sgr, stringSequence, terminator, offset, whole) => {
     if (sgr !== undefined) return allowSgr ? match : "";
-    return match.startsWith("\x1b") || match.startsWith("\x9d") ? "" : "?";
+    if (stringSequence !== undefined) return terminator === undefined && (markTail || offset + match.length < whole.length) ? "?" : "";
+    return match.startsWith("\x1b") ? "" : "?";
   });
+}
+
+/**
+ * Sanitise a multi-line block one line at a time (each line is its own sink), so no sequence can
+ * reach across a line boundary. Use for previews, prompts and reports built from several fields.
+ * @param {string | string[]} lines  A block of text, or its lines.
+ * @param {{allowSgr?: boolean}} [options]
+ * @returns {string} the lines joined with `\n`
+ */
+export function sanitizeLines(lines, options) {
+  const list = Array.isArray(lines) ? lines : String(lines ?? "").split("\n");
+  // Each line is its own sink, so an unterminated string sequence ends its line and always leaves the `?` marker.
+  return list.map((line) => neutralise(String(line ?? ""), options?.allowSgr === true, true)).join("\n");
+}
+
+/**
+ * Quote one argument for a SUGGESTED shell command (remediation text); null means "do not embed this
+ * value in a runnable command". The style follows the platform the suggestion will be run on.
+ *
+ * POSIX: path-safe characters stay bare; anything else is single quoted, with embedded single quotes
+ * written as `'\''`. Single quotes are never expanded by sh/bash/zsh.
+ *
+ * win32: the suggestion may be pasted into cmd.exe OR PowerShell, and the only quoting both understand
+ * is DOUBLE quotes (cmd does not treat single quotes as quotes at all). So a value made only of
+ * path-safe characters stays bare (no comma: PowerShell reads it as an array operator); otherwise it is
+ * wrapped in double quotes, which is safe in both shells unless the value holds a character that still
+ * expands inside them (`$`, backtick for PowerShell; `%`, `!` for cmd), a double quote (a Windows file
+ * name cannot hold one, so it signals foreign text; typographic double quotes count as well), a control
+ * character, or ends in a backslash (it would escape the closing quote). Those values return null.
+ * @param {unknown} value
+ * @param {string} [platform]
+ * @returns {string | null}
+ */
+export function quoteArg(value, platform = process.platform) {
+  const text = String(value ?? "");
+  if (platform !== "win32") {
+    return /^[A-Za-z0-9_@%+=:,./-]+$/.test(text) && !text.startsWith("-") ? text : `'${text.replaceAll("'", "'\\''")}'`;
+  }
+  if (/^[A-Za-z0-9_@+=:.\/\\-]+$/.test(text) && !/^[-@]/.test(text)) return text;
+  // eslint-disable-next-line no-control-regex
+  if (/[$`%!"\u201c\u201d\u201e\u201f\u2033\uff02\x00-\x1f\x7f-\x9f]|\\$/.test(text)) return null;
+  return `"${text}"`;
+}
+
+/**
+ * Build the text of a suggested command around one untrusted value (usually a path). When the value
+ * can be quoted for the platform's shells, the result is `prefix + quoted + suffix`. When it cannot
+ * (see `quoteArg`), the value is NOT embedded: the command is shown with a `<path>` placeholder and the
+ * value follows on its own line with the instruction to quote it for the user's shell.
+ * @param {string} prefix
+ * @param {unknown} value
+ * @param {string} [suffix]
+ * @param {string} [platform]
+ * @returns {string}
+ */
+export function suggestCommand(prefix, value, suffix = "", platform = process.platform) {
+  const quoted = quoteArg(value, platform);
+  if (quoted !== null) return `${prefix}${quoted}${suffix}`;
+  return `${prefix}<path>${suffix}
+  where <path> is the following path (quote this path for your shell):
+  ${String(value ?? "")}`;
 }
 
 const SECRET_NAME = /(?:password|passwd|secret|token|api[_.-]?key|apikey|private[_.-]?key|credential|auth)/i;

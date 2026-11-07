@@ -1,7 +1,8 @@
 // Key decoding on top of readline's emitKeypressEvents, with an injectable input stream.
 // Normalised events: {name: 'up'|'down'|'left'|'right'|'enter'|'escape'|'ctrl-c'|'backspace'|'tab'|
-// 'delete'|'char'|'eof', ch?: string}. Ctrl+C is always surfaced as an event (raw mode swallows
-// the signal), and stream end/close become a single `eof`. Ctrl+D is also reported as `eof`.
+// 'delete'|'char'|'ctrl-d'|'eof', ch?: string}. Ctrl+C is always surfaced as an event (raw mode swallows
+// the signal). Ctrl+D is its own `ctrl-d` event (the composer treats it like a shell, pickers like Esc);
+// only the end/close of the stream becomes the single `eof`.
 
 import { emitKeypressEvents } from "node:readline";
 
@@ -14,7 +15,7 @@ const NAMED = { up: "up", down: "down", left: "left", right: "right", return: "e
  */
 export function decodeKey(str, key = {}) {
   if ((key?.ctrl && key.name === "c") || str === "\x03") return { name: "ctrl-c" };
-  if ((key?.ctrl && key.name === "d") || str === "\x04") return { name: "eof" };
+  if ((key?.ctrl && key.name === "d") || str === "\x04") return { name: "ctrl-d" };
   const named = NAMED[key?.name];
   if (named) return { name: named };
   const text = str ?? key?.sequence;

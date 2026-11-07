@@ -20,7 +20,7 @@ import { probeAll } from "./auth/index.mjs";
 import { DEFAULT_HOST, REQUIRED_SCOPES } from "./auth/github.mjs";
 import { ConfigError, resolveConfig } from "./config.mjs";
 import { resolveUserDir } from "./paths.mjs";
-import { redactDeep } from "./redact.mjs";
+import { redactDeep, suggestCommand } from "./redact.mjs";
 import { StoreError } from "./store.mjs";
 import { classifyExecutableConfig, safeTrustStatus, TRUST_FILES } from "./trust.mjs";
 
@@ -221,7 +221,6 @@ function describeFindings(findings) {
   return parts.length > 0 ? parts.join(", ") : "no executable config detected";
 }
 
-const quoteIfNeeded = (value) => (/\s/.test(value) ? `"${value}"` : value);
 
 function repoTrustCheck(target, { env, platform, homedir, fs }) {
   if (!target) return check("repo.trust", "PASS", "Not applicable: no repository is connected and the current directory has no repository config files.");
@@ -240,7 +239,7 @@ function repoTrustCheck(target, { env, platform, homedir, fs }) {
     "repo.trust",
     "WARN",
     `Repository ${status.realpath} is untrusted (${why}); executable config found: ${summary}. Its commands and settings are not applied or run.`,
-    `Review the repository config, then run: asterweave trust grant --path ${quoteIfNeeded(status.realpath)}`,
+    suggestCommand("Review the repository config, then run: asterweave trust grant --path ", status.realpath),
   );
 }
 

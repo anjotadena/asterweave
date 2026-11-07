@@ -1,7 +1,7 @@
 // Shared fixtures for the auth tests (not a test file: run-tests only runs *.test.mjs).
 
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { after } from "node:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,7 +18,7 @@ after(() => {
 });
 
 export function makeSandbox() {
-  const root = mkdtempSync(join(tmpdir(), "aw-auth-"));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aw-auth-")));
   sandboxes.push(root);
   const userDir = join(root, "user");
   const binDir = join(root, "bin");

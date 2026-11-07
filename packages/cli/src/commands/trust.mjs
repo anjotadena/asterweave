@@ -9,8 +9,9 @@
 
 import path from "node:path";
 import { CliError, EXIT, UsageError } from "../exit-codes.mjs";
-import { sanitizeForTerminal } from "../redact.mjs";
-import { classifyExecutableConfig, grantTrust, revokeTrust, safeTrustStatus, trustStatus } from "../trust.mjs";
+import { stringifyJson } from "../json.mjs";
+import { sanitizeForTerminal, sanitizeLines, suggestCommand } from "../redact.mjs";
+import { classifyExecutableFromStatus, grantTrust, revokeTrust, safeTrustStatus, trustStatus } from "../trust.mjs";
 import { askYesNo, withTerminal } from "../tui/session.mjs";
 import { createTerminal } from "../tui/terminal.mjs";
 import { defaultRepoPath, isInteractive, seams, stringOption } from "./shared.mjs";
@@ -30,7 +31,7 @@ export async function trustCommand(ctx) {
   const json = ctx.options?.json === true;
   if (sub === "grant" && pathFlag === undefined && (json || !isInteractive(ctx))) {
     throw new UsageError("trust grant needs an explicit --path when it is not run in an interactive terminal (or with --json).", {
-      remediation: 'Example: asterweave trust grant --path "/path/to/repo"',
+      remediation: "Example: asterweave trust grant --path /path/to/repo",
     });
   }
   const target = pathFlag === undefined ? defaultRepoPath(ctx).path : path.resolve(ctx.cwd ?? process.cwd(), pathFlag);
@@ -41,16 +42,18 @@ export async function trustCommand(ctx) {
   // explicit acts that recreate it, so their preview must not throw on it. The hash is still computed
   // from the repository files, so `expectedHash` binding is unchanged.
   const before = sub === "status" ? trustStatus(target, options) : safeTrustStatus(target, options);
-  const findings = classifyExecutableConfig(before.realpath, { fs: options.fs });
+  // Findings come from the bytes and file states that went into `before.hash` (no second read), so the
+  // preview lists exactly what the grant covers.
+  const findings = classifyExecutableFromStatus(before);
 
   if (sub === "status") {
-    if (json) write(ctx.stdout, `${JSON.stringify({ ok: true, ...statusBody(before), executable: findings })}\n`);
-    else write(ctx.stdout, sanitizeForTerminal(formatStatus(before, findings)));
+    if (json) write(ctx.stdout, `${stringifyJson({ ok: true, ...statusBody(before), executable: findings })}\n`);
+    else write(ctx.stdout, sanitizeLines(formatStatus(before, findings)));
     return EXIT.OK;
   }
 
   if (sub === "grant") {
-    if (!json) write(ctx.stdout, sanitizeForTerminal(formatGrantPreview(before, findings)));
+    if (!json) write(ctx.stdout, sanitizeLines(formatGrantPreview(before, findings)));
     if (pathFlag === undefined) {
       // Interactive grant of the default repository: the user must say yes, naming the path.
       const answer = await confirmGrant(ctx, before.realpath, findings);
@@ -60,16 +63,16 @@ export async function trustCommand(ctx) {
     // Bound to the previewed hash: grantTrust re-hashes and refuses when the files changed since.
     const granted = grantTrust(target, { ...options, expectedHash: before.hash });
     if (json) {
-      write(ctx.stdout, `${JSON.stringify({ ok: true, trusted: true, path: granted.realpath, hash: granted.hash, trustedAt: granted.trustedAt, executable: findings })}\n`);
+      write(ctx.stdout, `${stringifyJson({ ok: true, trusted: true, path: granted.realpath, hash: granted.hash, trustedAt: granted.trustedAt, executable: findings })}\n`);
     } else {
-      write(ctx.stdout, sanitizeForTerminal(`Trusted ${granted.realpath}\nhash ${granted.hash}\n`));
+      write(ctx.stdout, sanitizeLines(`Trusted ${granted.realpath}\nhash ${granted.hash}\n`));
     }
     return EXIT.OK;
   }
 
   const revoked = revokeTrust(target, options);
   if (json) {
-    write(ctx.stdout, `${JSON.stringify({ ok: true, trusted: false, path: revoked.realpath, hash: revoked.hash, removed: revoked.removed, recreated: revoked.recreated })}\n`);
+    write(ctx.stdout, `${stringifyJson({ ok: true, trusted: false, path: revoked.realpath, hash: revoked.hash, removed: revoked.removed, recreated: revoked.recreated })}\n`);
   } else if (revoked.recreated) {
     write(ctx.stdout, sanitizeForTerminal(`The trust store was unreadable and has been recreated empty; ${revoked.realpath} is not trusted.\n`));
   } else {
@@ -119,7 +122,7 @@ function trustLabel(status) {
 
 function formatStatus(status, findings) {
   const lines = [`Repository  ${status.realpath}`, `Trust       ${trustLabel(status)}`, `Hash        ${status.hash}`, "", ...formatFindings(findings)];
-  if (!status.trusted && findings.length > 0) lines.push("", `Review these files, then run: asterweave trust grant --path "${status.realpath}"`);
+  if (!status.trusted && findings.length > 0) lines.push("", suggestCommand("Review these files, then run: asterweave trust grant --path ", status.realpath));
   return `${lines.join("\n")}\n`;
 }
 

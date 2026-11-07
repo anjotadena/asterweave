@@ -12,13 +12,13 @@ The CLI returns a small, stable set of exit codes. The same table is printed by 
 
 | Code | Meaning | Typical causes |
 | --- | --- | --- |
-| `0` | OK | The command succeeded. `doctor` with only `PASS` and `WARN`; `auth status` with a signed-out model provider; `/exit` or Ctrl+D in a session; `trust revoke` for a repository that was not trusted |
-| `1` | Error, or any doctor `FAIL` | `doctor` found a `FAIL` check. `repo connect` problems such as `REPO_NOT_GIT`, `REPO_NO_ORIGIN`, `REPO_ORIGIN_MISMATCH`, `REPO_BRANCH_NOT_FOUND`. `repo status` when the connected path has disappeared. `git` missing. `gh repo list` failing. A corrupt or unwritable file in the user directory (including `trust status` on a corrupt `trust.json`). `trust` problems: a path that does not exist (`REPO_PATH_INVALID`), a declined confirmation (`TRUST_DECLINED`), or governing files that changed between the preview and the grant (`TRUST_CHANGED_DURING_GRANT`). Esc in a picker (`LOGIN_CANCELLED`, `LAUNCH_CANCELLED`, `REPO_CONNECT_CANCELLED`). A provider login that could not start. Any unexpected failure, including an uncaught exception in the interactive session (the terminal is restored first; Node prints the error and exits `1`) |
+| `0` | OK | The command succeeded. `doctor` with only `PASS` and `WARN`; `auth status` with a signed-out model provider; `/exit` or Ctrl+D on an empty composer line in a session; `trust revoke` for a repository that was not trusted |
+| `1` | Error, or any doctor `FAIL` | `doctor` found a `FAIL` check. `repo connect` problems such as `REPO_NOT_GIT`, `REPO_NO_ORIGIN`, `REPO_ORIGIN_MISMATCH`, `REPO_BRANCH_NOT_FOUND`. `repo status` when the connected path has disappeared. `git` missing. `gh repo list` failing. A corrupt or unwritable file in the user directory (including `trust status` on a corrupt `trust.json`). `trust` problems: a path that does not exist (`REPO_PATH_INVALID`), a declined confirmation (`TRUST_DECLINED`), or governing files that changed between the preview and the grant (`TRUST_CHANGED_DURING_GRANT`). Esc or Ctrl+D in a picker or at the `trust grant` y/N prompt (`LOGIN_CANCELLED`, `LAUNCH_CANCELLED`, `REPO_CONNECT_CANCELLED`, `TRUST_DECLINED`). `TRUST_STORE_BUSY`: another Asterweave process held the `trust.json.lock` file for the whole 2 second wait. A provider login that could not start. Any unexpected failure, including an uncaught exception in the interactive session (the terminal is restored first; Node prints the error and exits `1`) |
 | `2` | Usage error, or a TTY is required | Unknown command or subcommand, missing or extra arguments, an invalid host, `--json` with the bare launch or `auth login`, `repo connect` without `--repo` and `--branch` in a non-interactive context, `trust grant` without `--path` in a non-interactive context, and a bare `asterweave` with no terminal |
 | `3` | Authentication required or invalid | `auth status` when GitHub is signed out, expired, or missing scopes. Interactive launch when `gh` is missing or unreadable. `auth login` when `gh` or `claude` is missing, or the sign-in still fails the re-check. `repo connect` when `gh repo list` reports that you are not authenticated |
-| `4` | Repository trust required | **Reserved.** Defined for operations that must run trusted repository configuration. No Phase A command returns it; untrusted configuration appears as a skipped key in `config show`, a `repo.trust` warning in `doctor`, and a launch banner warning |
+| `4` | Repository trust required | `config show --strict` when the repository has executable config (quality-gate commands, Claude Code settings, MCP servers) and is not trusted (`TRUST_REQUIRED`; the remediation is `asterweave trust grant --path <path>`, with the path quoted for the platform shell when needed; on Windows a path that cmd.exe or PowerShell would still expand is printed on its own line instead of inside the command). Without `--strict`, untrusted configuration is only a skipped key in `config show`, a `repo.trust` warning in `doctor`, and a launch banner warning, and the exit code stays 0. Any later operation that must run trusted configuration uses the same code |
 | `5` | Configuration invalid | A bad value in the user `config.json`, an environment variable, a flag, or the repository adapter, or a `config.json` that is not valid JSON. Returned by `config show`, by `auth status` / `auth login` (which resolve the GitHub host from configuration), and by interactive `launch` and `repo connect` when the configuration is invalid, or when `github.host` is not `github.com` (`GITHUB_HOST_UNSUPPORTED`; this build supports github.com only for those two commands). A repository adapter that cannot be read as a regular file is also a configuration error. `doctor` reports the same problem as a `config.valid` `FAIL`, so its own exit code is `1` |
-| `130` | Interrupted | Ctrl+C or SIGINT during a picker, the session, or a provider login hand-off. A closed input stream in a picker. A provider login whose process was killed or exited non-zero (`LOGIN_INTERRUPTED`). Nothing is saved |
+| `130` | Interrupted | Ctrl+C or SIGINT during a picker, the session, or a provider login hand-off. A closed input stream (not Ctrl+D) in a picker or at the y/N prompt. A provider login whose process was killed or exited non-zero (`LOGIN_INTERRUPTED`). Nothing is saved |
 
 Examples:
 
@@ -43,7 +43,8 @@ Errors carry a stable machine-readable `code`. The ones you are most likely to s
 | `GITHUB_HOST_UNSUPPORTED` | 5 | interactive `launch`, `repo connect` (`github.host` is not `github.com`) |
 | `TRUST_DECLINED` | 1 | `trust grant` (the y/N confirmation was not answered `y`; nothing changed) |
 | `TRUST_CHANGED_DURING_GRANT` | 1 | `trust grant` (a governing file changed after the preview; nothing was granted) |
-| `TRUST_REQUIRED` | 4 | reserved |
+| `TRUST_REQUIRED` | 4 | `config show --strict` (executable repository config that is not trusted) |
+| `TRUST_STORE_BUSY` | 1 | `trust grant`, `trust revoke` (the trust store lock was held for the whole wait) |
 | `REPO_INVALID`, `REPO_BRANCH_INVALID` | 2 | `repo connect` (value not in `owner/name` form, or not a usable branch name) |
 | `REPO_PATH_INVALID`, `REPO_NOT_GIT`, `REPO_NO_ORIGIN`, `REPO_ORIGIN_MISMATCH`, `REPO_BRANCH_NOT_FOUND`, `REPO_BRANCHES_FAILED`, `REPO_NONE_FOUND`, `REPO_RECORD_INVALID` | 1 | `repo`, launch, `trust` (`REPO_PATH_INVALID`) |
 | `GIT_NOT_INSTALLED`, `GIT_FAILED` | 1 | `repo` |
@@ -67,6 +68,8 @@ When a command is run with `--json` and fails, stdout carries exactly one object
 - `remediation` is a suggested next step, or `null`.
 
 An error found while parsing the command line itself (for example a malformed option such as `--=x`) happens before the command knows it was asked for JSON, so it is reported as text on stderr.
+
+Strings in the JSON (values and object keys) never contain raw C1 control, bidirectional-control or U+2028/U+2029 characters: they are written as \u escapes (backslash, u, four hex digits), so the output parses to the same data but is safe to print.
 
 Without `--json`, an error is written to stderr as `Asterweave <area> error: <message>`, where `area` is the command name (or `CLI`), followed on the next line by the remediation when there is one:
 
