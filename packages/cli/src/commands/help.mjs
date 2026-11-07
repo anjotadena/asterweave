@@ -95,9 +95,11 @@ export const COMMAND_HELP = Object.freeze({
   config: block([
     "asterweave config - show the effective configuration",
     "",
-    "Usage: asterweave config show [--json] [--path dir] [--runner local] [--github-host host] [--ui-color auto|always|never]",
+    "Usage: asterweave config show [--json] [--strict] [--path dir] [--runner local] [--github-host host] [--ui-color auto|always|never]",
     "",
-    "  --path  Repository to layer in (default: the connected repository, else the current directory).",
+    "  --path    Repository to layer in (default: the connected repository, else the current directory).",
+    "  --strict  Exit 4 (TRUST_REQUIRED) when the repository has executable config (quality-gate commands,",
+    "            Claude Code settings, MCP servers) and is not trusted. Without it those keys are skipped and reported.",
     "",
     "Precedence (lowest to highest): default < user config.json < trusted repo .claude/asterweave.json",
     "  < ASTERWEAVE_* environment < flags. Each key is shown with its origin.",
@@ -105,7 +107,7 @@ export const COMMAND_HELP = Object.freeze({
     "",
     'JSON: {"ok":true,"precedence":[],"entries":{"<key>":{"value","origin"}},"unknown":[],"repo":{...}|null}',
     "",
-    "Exit codes: 0 ok · 2 usage · 5 configuration invalid",
+    "Exit codes: 0 ok · 2 usage · 4 --strict and the repository is untrusted · 5 configuration invalid",
   ]),
   trust: block([
     "asterweave trust - review, grant or revoke trust for a repository",

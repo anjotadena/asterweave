@@ -5,6 +5,7 @@
 
 import { authStatus, loginClaude, loginGithub, logoutPlan } from "../auth/index.mjs";
 import { CliError, EXIT, UsageError } from "../exit-codes.mjs";
+import { stringifyJson } from "../json.mjs";
 import { sanitizeForTerminal } from "../redact.mjs";
 import { createStyle } from "../tui/render.mjs";
 import { pickOne } from "./picker.mjs";
@@ -60,7 +61,7 @@ async function status(ctx, args) {
   if (args.length > 0) throw new UsageError(`Unexpected argument '${args[0]}'.`, { remediation: USAGE });
   const host = resolveHost(ctx, stringOption(ctx, "host", USAGE));
   const report = await authStatus({ ...providerSeams(ctx), host });
-  if (ctx.options?.json === true) write(ctx.stdout, `${JSON.stringify(report)}\n`);
+  if (ctx.options?.json === true) write(ctx.stdout, `${stringifyJson(report)}\n`);
   else write(ctx.stdout, formatAuthStatus(report));
   return report.ok ? EXIT.OK : EXIT.AUTH;
 }
@@ -139,7 +140,7 @@ async function logout(ctx, args) {
   // Reference removal only: logoutPlan never spawns anything.
   const result = logoutPlan(plane, { ...seams(ctx), host: hostFlag });
   if (ctx.options?.json === true) {
-    write(ctx.stdout, `${JSON.stringify({ ok: true, plane: result.plane, droppedReference: result.droppedReference, providerCommand: result.providerCommand })}\n`);
+    write(ctx.stdout, `${stringifyJson({ ok: true, plane: result.plane, droppedReference: result.droppedReference, providerCommand: result.providerCommand })}\n`);
     return EXIT.OK;
   }
   const label = plane === "github" ? "GitHub" : "Claude Code";

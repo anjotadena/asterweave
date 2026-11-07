@@ -6,6 +6,7 @@
 
 import { EXIT, UsageError } from "../exit-codes.mjs";
 import { runDoctor } from "../doctor.mjs";
+import { stringifyJson } from "../json.mjs";
 import { sanitizeForTerminal } from "../redact.mjs";
 import { createStyle } from "../tui/render.mjs";
 import { colorMode } from "./shared.mjs";
@@ -40,7 +41,7 @@ export async function doctorCommand(ctx) {
 
   const report = await runDoctor(options);
   if (ctx.options?.json === true) {
-    ctx.stdout.write(`${JSON.stringify({ ok: report.ok, checks: report.checks })}\n`);
+    ctx.stdout.write(`${stringifyJson({ ok: report.ok, checks: report.checks })}\n`);
   } else {
     ctx.stdout.write(formatDoctorReport(report, createStyle({ env: ctx.env, isTTY: Boolean(ctx.stdout?.isTTY), mode: colorMode(ctx) })));
   }

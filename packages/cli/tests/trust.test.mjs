@@ -12,7 +12,7 @@ after(() => {
   for (const dir of madeDirs) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 const base = () => {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), "aw-trust-")));
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "aw-trust-")));
   madeDirs.push(dir);
   return dir;
 };

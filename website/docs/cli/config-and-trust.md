@@ -16,7 +16,7 @@ From lowest to highest:
 2. **user**: `config.json` in the [user directory](#user-directory).
 3. **repo**: the repository's `.claude/asterweave.json` (the same file the plugin uses, read-only here). Executable fields are applied only when the repository is [trusted](#trust-store).
 4. **env**: `ASTERWEAVE_*` environment variables. An empty variable is ignored.
-5. **flag**: command-line flags (`config show` accepts `--runner`, `--github-host`, `--ui-color`, and `--path` to layer in a specific repository under the usual trust rules).
+5. **flag**: command-line flags (`config show` accepts `--runner`, `--github-host`, `--ui-color`, and `--path` to layer in a specific repository under the usual trust rules, and `--strict`, see [`config show --strict`](#config-show---strict)).
 
 A higher layer replaces a lower one key by key. An invalid value in **any** layer stops the command with exit code 5 and names the key and where it came from.
 
@@ -50,7 +50,7 @@ Keys can be nested or written flat; both of these are the same setting.
 ## `config show`
 
 ```bash
-asterweave config show [--json] [--path dir] [--runner local] [--github-host host] [--ui-color auto|always|never]
+asterweave config show [--json] [--strict] [--path dir] [--runner local] [--github-host host] [--ui-color auto|always|never]
 ```
 
 Rows are `key`, `value`, and `(origin)`, where origin is `default`, `user:<file>`, `repo:<file>`, `env:<NAME>`, or `flag`. Key names that look secret (containing `password`, `secret`, `token`, `api_key`, `credential`, or `auth`) show `[redacted]`, and token-shaped or email-shaped values are redacted.
@@ -80,7 +80,7 @@ qualityGates.required  []               (default)
 Precedence (lowest to highest): default < user < repo < env < flag
 Repository: C:\work\widgets (untrusted: NOT_GRANTED)
 Note: repository config C:\work\widgets\.claude\asterweave.json was only partly applied: qualityGates.required skipped because the repository is not trusted.
-      Review it, then run: asterweave trust grant --path "C:\work\widgets"
+      Review it, then run: asterweave trust grant --path C:\work\widgets
 Ignored unknown keys: bogus
 ```
 
@@ -110,6 +110,10 @@ Note that `provider.workItems` (not executable) is applied from the untrusted re
 ```
 
 (`entries` is abridged to two keys; the real output lists all five.) An invalid value exits 5: for example `ASTERWEAVE_RUNNER=docker asterweave config show --json` prints `{"ok":false,"error":{"code":"CONFIG_INVALID",...}}`.
+
+### `config show --strict`
+
+By default `config show` exits 0 for an untrusted repository and reports the skipped executable keys. With `--strict` it instead exits **4** (`TRUST_REQUIRED`) when the repository has executable config (a quality-gate command, `.claude/settings*.json`, or `.mcp.json`) and is not trusted, writes nothing to stdout, and prints `asterweave trust grant --path <path>` as the remediation (the path is quoted when it contains anything but plain path characters: single quotes on macOS and Linux, double quotes on Windows so the command works in both cmd.exe and PowerShell; a Windows path that either shell would still expand, for example one containing `%`, `!`, `$` or a backtick, is never put in the command: the command shows `<path>` and the path follows on its own line with the note to quote it for your shell). With `--json` the usual error envelope is printed. A trusted repository, or one with no executable config, exits 0 as normal. The check is the same trust check later operations use, and it never prints command text.
 
 ## User directory
 
@@ -141,7 +145,7 @@ Writes are atomic (temporary file then rename, retried on Windows file locks), d
 | `.claude/settings.json` and `.claude/settings.local.json` | When `claude` runs in the repository it loads hooks, environment variables, helpers, and permissions from them |
 | `.mcp.json` | When `claude` runs in the repository it may start the MCP servers declared there |
 
-In Phase A, **none of these is executed by Asterweave**. They are detected, counted by file name and kind (never printing a command's text), and gated. Trust currently changes one thing in the output: whether `config show` applies `qualityGates.required`. It also drives the `repo.trust` check in `doctor`, the trust line in `repo status`, and a warning in the launch banner when an untrusted repository has executable files. Exit code 4 is reserved for a later phase that needs trusted configuration; no Phase A command returns it.
+In Phase A, **none of these is executed by Asterweave**. They are detected, counted by file name and kind (never printing a command's text), and gated. Trust currently changes one thing in the output: whether `config show` applies `qualityGates.required`. It also drives the `repo.trust` check in `doctor`, the trust line in `repo status`, and a warning in the launch banner when an untrusted repository has executable files. Exit code 4 is returned by `config show --strict` for an untrusted repository with executable config; nothing else in Phase A returns it.
 
 ## Trust store
 
@@ -179,8 +183,10 @@ asterweave trust revoke --path C:\work\widgets
 ```
 
 - `--path` defaults to the connected repository, then the current directory. **`trust grant` needs an explicit `--path` when not run in a terminal or with `--json`**, so a script can never trust the current directory by accident.
-- In a terminal, `trust grant` without `--path` prints the review and then asks `Trust <path> (<counts of executable config>)? [y/N]`. The default is No (Enter, Esc, `n`); only `y` grants. Ctrl+C exits 130.
+- In a terminal, `trust grant` without `--path` prints the review and then asks `Trust <path> (<counts of executable config>)? [y/N]`. The default is No (Enter, Esc, `n`); only `y` grants. Esc and Ctrl+D count as No (exit 1, `TRUST_DECLINED`); Ctrl+C or a closed input stream exits 130.
 - A grant is bound to what was reviewed: the hash shown in the preview is re-checked when the grant is recorded. If a governing file changed in between, nothing is granted, the exit code is 1 with code `TRUST_CHANGED_DURING_GRANT`, and the fix is to rerun `trust grant`.
+- The preview lists the executable config found in the very bytes that were hashed for the grant (not a second read of the files).
+- `trust grant` and `trust revoke` serialise their update of `trust.json` with a lock file next to it (`trust.json.lock`, created exclusively, removed afterwards, taken over when older than 30 seconds). If another process holds it for the whole 2 second wait, the command exits 1 with `TRUST_STORE_BUSY` and nothing is written.
 - Configuration is parsed from the same bytes of `.claude/asterweave.json` that were hashed for trust, so the file cannot change between the trust check and its use.
 - If `trust.json` cannot be read, `launch`, `repo status`, `doctor` and `config show` treat the repository as **untrusted** and print `trust store unreadable: run asterweave trust revoke/grant to recreate` (executable config is not applied; the file is never rewritten by a read). `trust grant` and `trust revoke` are the explicit acts that recover it: they replace a corrupt `trust.json` with a fresh valid store (so nothing else stays trusted), and `trust grant` keeps its hash binding and y/N confirmation. `trust status` is a trust decision and fails closed instead: on a corrupt store it exits 1 with code `STORE_CORRUPT` and a remediation pointing at `trust revoke` / `trust grant`. A trust store that exists but cannot be read at all (for example a permissions error) is not recreated by either command; they exit 1 with `STORE_UNREADABLE`.
 - `grant` prints a preview first (the kinds and counts of executable config and which files the grant covers) and then records trust. With an explicit `--path` there is no separate confirmation prompt (that is the confirmation): read the files before you run it.
@@ -197,7 +203,7 @@ Hash        0000000000000000000000000000000000000000000000000000000000000000
 Executable repository config found:
    1  quality-gate command(s)  in .claude/asterweave.json
 
-Review these files, then run: asterweave trust grant --path "C:\work\widgets"
+Review these files, then run: asterweave trust grant --path C:\work\widgets
 ```
 
 JSON shapes (abridged):
@@ -223,9 +229,9 @@ Exit codes for `trust`:
 | Code | When |
 | --- | --- |
 | `0` | Success, including `revoke` of a repository that was not trusted |
-| `1` | The path does not exist (`REPO_PATH_INVALID`); the confirmation was declined (`TRUST_DECLINED`); a governing file changed between the preview and the grant (`TRUST_CHANGED_DURING_GRANT`); `trust status` on a corrupt or unreadable `trust.json` (`STORE_CORRUPT` / `STORE_UNREADABLE`); `trust.json` could not be written |
+| `1` | The path does not exist (`REPO_PATH_INVALID`); the confirmation was declined (`TRUST_DECLINED`); a governing file changed between the preview and the grant (`TRUST_CHANGED_DURING_GRANT`); `trust status` on a corrupt or unreadable `trust.json` (`STORE_CORRUPT` / `STORE_UNREADABLE`); `trust.json` could not be written; `trust.json.lock` stayed held (`TRUST_STORE_BUSY`) |
 | `2` | Usage error (unknown subcommand or option, `grant` without `--path` outside a terminal or with `--json`) |
-| `130` | Ctrl+C at the confirmation prompt |
+| `130` | Ctrl+C (or a closed input stream) at the confirmation prompt |
 
 ## Related
 

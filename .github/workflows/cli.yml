@@ -1,0 +1,48 @@
+name: CLI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/**"
+      - "plugins/asterweave/**"
+      - "package.json"
+      - ".github/workflows/cli.yml"
+  pull_request:
+    paths:
+      - "packages/**"
+      - "plugins/asterweave/**"
+      - "package.json"
+      - ".github/workflows/cli.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cli-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check (${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: ["22"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Validate plugin, run plugin tests and CLI tests
+        run: npm run check

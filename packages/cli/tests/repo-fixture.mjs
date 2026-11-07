@@ -13,7 +13,7 @@ import { isExecutableFile } from "../src/proc.mjs";
 const temporary = [];
 
 export function tempDir(prefix = "aw-repo-") {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), prefix)));
   temporary.push(dir);
   return dir;
 }

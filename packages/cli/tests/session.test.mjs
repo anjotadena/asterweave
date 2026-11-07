@@ -265,9 +265,9 @@ test("a thrown error inside the loop rejects and the terminal is still restored"
   assert.equal(h.term.stdin.listenerCount("keypress"), 0, "input detached");
 });
 
-test("Ctrl-D decodes to eof", () => {
-  assert.deepEqual(decodeKey("\x04", { ctrl: true, name: "d" }), { name: "eof" });
-  assert.deepEqual(decodeKey("\x04", undefined), { name: "eof" });
+test("Ctrl-D decodes to its own ctrl-d event (stream end alone is eof)", () => {
+  assert.deepEqual(decodeKey("\x04", { ctrl: true, name: "d" }), { name: "ctrl-d" });
+  assert.deepEqual(decodeKey("\x04", undefined), { name: "ctrl-d" });
 });
 
 // --- pure screens -------------------------------------------------------------------------------------------------

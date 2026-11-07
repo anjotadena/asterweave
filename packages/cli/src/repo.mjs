@@ -22,7 +22,7 @@ import path from "node:path";
 import { CliError, EXIT } from "./exit-codes.mjs";
 import { resolveUserDir, userFilePath } from "./paths.mjs";
 import { runBinary } from "./proc.mjs";
-import { redactText, sanitizeForTerminal } from "./redact.mjs";
+import { redactText, sanitizeForTerminal, suggestCommand } from "./redact.mjs";
 import { readJson, StoreError, writeJsonAtomic } from "./store.mjs";
 import { safeTrustStatus } from "./trust.mjs";
 
@@ -113,6 +113,22 @@ export function gitEnv(env) {
   return { ...out, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" };
 }
 
+/** Variables that would redirect `gh` to another host or repository (matched case-insensitively). */
+const GH_ENV_DROP = new Set(["gh_host", "gh_repo", "gh_enterprise_token", "github_enterprise_token"]);
+
+/**
+ * Environment for `gh repo list`: the parent environment (gh needs PATH, HOME/APPDATA, proxies, and may rely
+ * on GH_TOKEN / GITHUB_TOKEN / GH_CONFIG_DIR) minus the variables that redirect it, with the host pinned to
+ * github.com: GH_HOST or GH_REPO in the parent shell must not point the listing at another instance.
+ */
+export function ghEnv(env) {
+  const out = {};
+  for (const [key, value] of Object.entries(env ?? process.env)) {
+    if (typeof value === "string" && !GH_ENV_DROP.has(key.toLowerCase())) out[key] = value;
+  }
+  return { ...out, GH_HOST: "github.com", GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1", NO_COLOR: "1" };
+}
+
 /** Flags prepended to every git call (see the header comment for what they do and do not guarantee). */
 function gitPrefix(platform) {
   return [
@@ -195,7 +211,7 @@ export async function listRepositories(options = {}) {
   }
   const result = await runBinary("gh", ["repo", "list", "--json", "nameWithOwner,defaultBranchRef", "--limit", String(limit)], {
     cwd,
-    env: { ...(options.env ?? process.env), GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1", NO_COLOR: "1" },
+    env: ghEnv(options.env),
     spawn: options.spawn,
     exists: options.exists,
     platform: options.platform,
@@ -307,7 +323,7 @@ async function resolveWorkTree(inputPath, options) {
     throw new CliError(`${real} is not a git work tree${unsafe ? " that git considers safe" : ""}.`, {
       code: "REPO_NOT_GIT",
       exitCode: EXIT.ERROR,
-      remediation: unsafe ? `Review the directory, then run: git config --global --add safe.directory "${real}"` : "Pass an existing local clone with --path (Asterweave never clones).",
+      remediation: unsafe ? suggestCommand("Review the directory, then run: git config --global --add safe.directory ", real) : "Pass an existing local clone with --path (Asterweave never clones).",
     });
   }
   try {
@@ -354,7 +370,7 @@ export async function connectRepository({ repository, branch, path: repoPath, ..
 
   const origin = await readOrigin(root, options);
   if (!origin) {
-    throw new CliError(`${root} has no 'origin' remote.`, { code: "REPO_NO_ORIGIN", exitCode: EXIT.ERROR, remediation: `Add one with: git -C "${root}" remote add origin https://github.com/${repository}.git` });
+    throw new CliError(`${root} has no 'origin' remote.`, { code: "REPO_NO_ORIGIN", exitCode: EXIT.ERROR, remediation: suggestCommand("Add one with: git -C ", root, ` remote add origin https://github.com/${repository}.git`) });
   }
   if (!origin.github || origin.github.nameWithOwner.toLowerCase() !== repository.toLowerCase()) {
     throw new CliError(`The 'origin' remote of ${root} is ${origin.github ? origin.github.nameWithOwner : origin.url}, not ${repository}.`, {

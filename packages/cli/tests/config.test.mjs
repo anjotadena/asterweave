@@ -13,7 +13,7 @@ after(() => {
 });
 
 function setup() {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "aw-config-")));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aw-config-")));
   madeDirs.push(root);
   const userDir = join(root, "user");
   mkdirSync(userDir, { recursive: true });

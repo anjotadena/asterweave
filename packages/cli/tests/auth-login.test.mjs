@@ -144,7 +144,7 @@ test("claude login with only a .cmd shim -> CLAUDE_SHELL_SHIM_ONLY exit 3", asyn
   const sandbox = makeSandbox();
   const spawn = fakeSpawn(() => ({}));
   await assert.rejects(
-    loginClaude({ env: sandbox.env, spawn, platform: "win32", cwd: sandbox.userDir, exists: installed("claude.cmd") }),
+    loginClaude({ env: { ...sandbox.env, PATH: "C:\\aw-bin" }, spawn, platform: "win32", cwd: sandbox.userDir, exists: installed("claude.cmd") }),
     (error) => error.exitCode === EXIT.AUTH && error.code === "CLAUDE_SHELL_SHIM_ONLY",
   );
   assert.equal(spawn.calls.length, 0);

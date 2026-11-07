@@ -2,14 +2,16 @@
 // Shows the effective configuration with the origin of every key. Read-only.
 
 import path from "node:path";
-import { configView, resolveConfig } from "../config.mjs";
+import { configView, readExecutableRepoConfig, resolveConfig } from "../config.mjs";
 import { EXIT, UsageError } from "../exit-codes.mjs";
-import { sanitizeForTerminal } from "../redact.mjs";
+import { stringifyJson } from "../json.mjs";
+import { sanitizeForTerminal, suggestCommand } from "../redact.mjs";
+import { classifyExecutableConfig } from "../trust.mjs";
 import { defaultRepoPath, seams, stringOption } from "./shared.mjs";
 
-export const configCommandMeta = Object.freeze({ summary: "Show the effective configuration and where each value comes from", boolean: ["json"], options: ["json", "runner", "github-host", "ui-color", "path"] });
+export const configCommandMeta = Object.freeze({ summary: "Show the effective configuration and where each value comes from", boolean: ["json", "strict"], options: ["json", "strict", "runner", "github-host", "ui-color", "path"] });
 
-const USAGE = "Usage: asterweave config show [--json] [--path dir] [--runner local] [--github-host host] [--ui-color auto|always|never]";
+const USAGE = "Usage: asterweave config show [--json] [--strict] [--path dir] [--runner local] [--github-host host] [--ui-color auto|always|never]";
 /** Flag name -> configuration key. */
 const FLAG_KEYS = Object.freeze({ runner: "runner", "github-host": "github.host", "ui-color": "ui.color" });
 
@@ -31,13 +33,24 @@ export async function configCommand(ctx) {
   const pathFlag = stringOption(ctx, "path", USAGE);
   const repoPath = pathFlag === undefined ? defaultRepoPath(ctx).path : path.resolve(ctx.cwd ?? process.cwd(), pathFlag);
   const resolved = resolveConfig({ ...seams(ctx), flags, repoPath });
+  // --strict: executable repository config that is not trusted is an error (exit 4), decided by the real
+  // trust check (readExecutableRepoConfig -> assertTrusted), not by a second implementation of it.
+  if (ctx.options?.strict === true && resolved.repo && !resolved.repo.trusted && hasExecutableConfig(resolved.repo, ctx.fs)) {
+    readExecutableRepoConfig(resolved.repo.path, "use the executable repository config (config show --strict)", seams(ctx));
+  }
   const view = configView(resolved);
   if (ctx.options?.json === true) {
-    ctx.stdout.write(`${JSON.stringify({ ok: true, ...view })}\n`);
+    ctx.stdout.write(`${stringifyJson({ ok: true, ...view })}\n`);
     return EXIT.OK;
   }
   ctx.stdout.write(formatConfig(view, resolved));
   return EXIT.OK;
+}
+
+/** True when the repository layer skipped an executable key or the repository has settings / MCP files. */
+function hasExecutableConfig(repo, fs) {
+  if (repo.skipped.length > 0) return true;
+  return classifyExecutableConfig(repo.path, fs ? { fs } : undefined).length > 0;
 }
 
 function displayValue(key, value) {
@@ -64,7 +77,7 @@ export function formatConfig(view, resolved) {
     if (view.repo.skipped.length > 0) {
       lines.push(
         `Note: repository config ${safe(view.repo.file)} was only partly applied: ${view.repo.skipped.map(safe).join(", ")} skipped because the repository is not trusted.`,
-        `      Review it, then run: asterweave trust grant --path "${safe(view.repo.path)}"`,
+        safe(suggestCommand("      Review it, then run: asterweave trust grant --path ", view.repo.path)),
       );
     }
   }

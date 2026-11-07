@@ -1,11 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { tmpdir as osTmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 
 import { listWorktrees, removeWorktree, worktreeExists } from "../scripts/worktree.mjs";
+
+// git reports worktree paths in long form; on Windows runners TEMP is an 8.3 short path (RUNNER~1),
+// so expected paths must be resolved the same way (native realpath expands short names).
+const tmpdir = () => realpathSync.native(osTmpdir());
 
 function run(args, cwd) {
   const result = spawnSync("git", args, { cwd, encoding: "utf8" });

@@ -44,7 +44,7 @@ export async function withTerminal({ terminal, stdin, proc = process, onInterrup
 
 /**
  * One-of-N picker on the entered terminal. `render(index, {columns, rows})` returns the frame.
- * Resolves `{index}`, `{done: true, cancelled: true}` (Esc) or `{done: true, interrupted: true}`
+ * Resolves `{index}`, `{done: true, cancelled: true}` (Esc or Ctrl+D) or `{done: true, interrupted: true}`
  * (Ctrl+C, closed input, or `signal` aborting because of SIGINT). Once settled, no later key can
  * confirm anything. A render error restores nothing itself but rejects, so the surrounding
  * `withTerminal` restores the terminal and the error surfaces as a normal failure (never an
@@ -83,6 +83,7 @@ export function pickOne({ terminal, input, count, render, selected = 0, signal }
       else if (event.name === "enter") return finish({ index });
       else if (event.name === "escape") return finish({ done: true, cancelled: true });
       else if (event.name === "ctrl-c" || event.name === "eof") return finish({ done: true, interrupted: true });
+      else if (event.name === "ctrl-d") return finish({ done: true, cancelled: true });
       else return undefined;
       draw();
       return undefined;
@@ -94,7 +95,7 @@ export function pickOne({ terminal, input, count, render, selected = 0, signal }
 
 /**
  * Single-key yes/no question on the entered terminal. Resolves `{yes: true}` only for `y`/`Y`;
- * Enter, Esc, `n` and everything else is No (default No). Ctrl+C, closed input and SIGINT resolve
+ * Enter, Esc, Ctrl+D, `n` and everything else is No (default No). Ctrl+C, closed input and SIGINT resolve
  * `{interrupted: true}`. Other keys are ignored.
  */
 export function askYesNo({ input, signal }) {
@@ -113,7 +114,7 @@ export function askYesNo({ input, signal }) {
     signal?.addEventListener("abort", onAbort, { once: true });
     offKey = input.onKey((event) => {
       if (event.name === "ctrl-c" || event.name === "eof") return finish({ interrupted: true });
-      if (event.name === "enter" || event.name === "escape") return finish({ yes: false });
+      if (event.name === "enter" || event.name === "escape" || event.name === "ctrl-d") return finish({ yes: false });
       if (event.name === "char") {
         if (event.ch === "y" || event.ch === "Y") return finish({ yes: true });
         if (event.ch === "n" || event.ch === "N") return finish({ yes: false });
@@ -136,7 +137,7 @@ const commandLines = () => [
  * }} options
  *   `repo` is `owner/name`; the `@` overlay offers `@name` and nothing else.
  * @returns {{run(): Promise<number>, interrupt(): void, transcript: string[]}}
- *   `run` resolves 0 for /exit, Ctrl-D or a closed input, 130 for Ctrl+C; it rejects if rendering
+ *   `run` resolves 0 for /exit, Ctrl-D on an empty composer or a closed input, 130 for Ctrl+C; it rejects if rendering
  *   or key handling throws (the caller's `finally` restores the terminal).
  */
 export function createSession({ terminal, input, style, version, repo, branch, banner = [] }) {
@@ -208,6 +209,7 @@ export function createSession({ terminal, input, style, version, repo, branch, b
   const handleKey = (event) => {
     switch (event.name) {
       case "ctrl-c": return 130;
+      case "ctrl-d": return buffer.length === 0 ? 0 : undefined; // like a shell: only on an empty line
       case "eof": return 0;
       case "escape": overlay = null; return undefined;
       case "up":

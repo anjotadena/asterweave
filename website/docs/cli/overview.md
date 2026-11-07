@@ -25,7 +25,7 @@ The CLI lives in `packages/cli/` in the Asterweave repository. The package is ma
 
 ## Requirements
 
-- Node.js 22 or newer (`engines.node` is `>=22`).
+- Node.js 22 or newer (`engines.node` is `>=22`). The CLI tests (`npm run test:cli`) need Node 22+ too and stop with a clear message on an older Node, although the repository root still allows Node 18 for the plugin scripts.
 - [GitHub CLI (`gh`)](https://cli.github.com/), signed in with the `repo` and `read:org` scopes. Asterweave never reads the token; it asks `gh`.
 - Optional: the native [Claude Code](https://docs.claude.com/en/docs/claude-code) build. On Windows the native `claude.exe` must be on `PATH`. A `.cmd`-only install is reported as `CLAUDE_SHELL_SHIM_ONLY` because Asterweave never uses a shell to launch programs.
 - `git`, for `repo connect` and `repo status`.
@@ -78,12 +78,14 @@ Run `asterweave` with no command in an interactive terminal. The flow is:
 | Input | Result |
 | --- | --- |
 | `/help` or `/commands` | Lists the slash commands |
-| `/exit` or Ctrl+D | Leaves Asterweave (exit code 0) |
+| `/exit`, or Ctrl+D on an empty composer line | Leaves Asterweave (exit code 0). Ctrl+D with text in the composer does nothing, like a shell |
 | `/sessions`, `/usage`, `/settings`, `/context` | Print "Not available in this build (agent sessions arrive in a later phase)." |
 | `@` | Opens a completion list; the only entry is the connected repository (for example `@widgets`) |
 | `/` | Opens the slash-command completion list. Tab or Enter completes, Up and Down move, Esc closes the list |
 | Any other text, then Enter | Echoed into the on-screen transcript, followed by the "not available" line. Nothing is sent anywhere and nothing is saved |
 | Ctrl+C | Leaves with exit code 130 |
+
+In a picker or at the `trust grant` y/N prompt, Ctrl+D behaves like Esc: it cancels (exit 1 with the matching `*_CANCELLED` / `TRUST_DECLINED` code) and nothing is saved. A closed input stream is still an interrupt (130).
 
 ## Command reference
 
@@ -98,7 +100,7 @@ Run `asterweave` with no command in an interactive terminal. The flow is:
 | `asterweave auth logout github\|model` | Remove Asterweave's stored reference and print the provider's own logout command | `--host h` (GitHub only), `--json` |
 | `asterweave repo connect` | Connect an existing local clone | `--repo owner/name`, `--branch name`, `--path dir`, `--json` |
 | `asterweave repo status` | Show the saved connection, work-tree state (always `unknown`: the work tree is never inspected), and trust | `--json` |
-| `asterweave config show` | Show effective configuration with the origin of every key. See [Configuration and trust](/cli/config-and-trust) | `--json`, `--path dir`, `--runner local`, `--github-host host`, `--ui-color auto\|always\|never` |
+| `asterweave config show` | Show effective configuration with the origin of every key. See [Configuration and trust](/cli/config-and-trust) | `--json`, `--strict`, `--path dir`, `--runner local`, `--github-host host`, `--ui-color auto\|always\|never` |
 | `asterweave trust [status\|grant\|revoke]` | Review, grant, or revoke trust for a repository. Defaults to `status` | `--path dir`, `--json` |
 
 Every command accepts `-h` / `--help`, which prints that command's help and exits 0.
@@ -159,7 +161,7 @@ If the connected path has disappeared or is no longer a git work tree, `ok` is `
 - `auth login` with no plane, `repo connect` without `--repo` and `--branch`, and `trust grant` without `--path` need a terminal or explicit flags; otherwise they exit 2.
 - A corrupt `repo.json` is reported as a warning and treated as not connected (`repo connect` or the launch picker replaces it); a corrupt `trust.json` is treated as untrusted with a warning. Neither stops `launch`, `repo status` or `doctor`, and reads never rewrite either file. `trust grant` and `trust revoke` recreate a corrupt `trust.json`; `trust status` exits 1 on one. The text `repo status` output prints `Work tree   unknown` (the JSON `dirty` is `null`).
 - A relative `ASTERWEAVE_CONFIG_DIR` is ignored (the platform default directory is used instead). When the user directory cannot be written, `doctor`'s `user-dir.writable` remediation tells you to set `ASTERWEAVE_CONFIG_DIR` to a writable **absolute** directory.
-- Text taken from a repository, config file, remote URL or provider (names, paths, error messages) is stripped of terminal control sequences before it is printed; `--json` output is escaped by JSON itself.
+- Text taken from a repository, config file, remote URL or provider (names, paths, error messages) is stripped of terminal control sequences before it is printed; `--json` output escapes C1, bidirectional and U+2028/U+2029 characters as \u escapes.
 - Output written to a pipe or file contains **no ANSI escape bytes**. Color is used only when stdout is a TTY and `NO_COLOR` is unset, subject to the `ui.color` setting (`never` disables it, `always` forces it unless `NO_COLOR` is set).
 - With `--json`, stdout carries only the JSON object. Human-readable errors go to stderr only (exit codes: [Exit codes](/cli/exit-codes)).
 

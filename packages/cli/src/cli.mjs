@@ -4,6 +4,7 @@
 import { readFileSync } from "node:fs";
 import { parseArgs } from "./args.mjs";
 import { CliError, EXIT, UsageError } from "./exit-codes.mjs";
+import { stringifyJson } from "./json.mjs";
 import { redactText, sanitizeForTerminal } from "./redact.mjs";
 import { registerAllCommands } from "./commands/index.mjs";
 import { EXIT_CODES_TEXT } from "./commands/help.mjs";
@@ -174,11 +175,11 @@ function reportError(error, { stdout, stderr, asJson, area }) {
   const exitCode = known ? error.exitCode : EXIT.ERROR;
   if (asJson) {
     const code = known ? error.code : "UNEXPECTED";
-    write(stdout, `${JSON.stringify({ ok: false, error: { code, message, remediation: known ? error.remediation ?? null : null } })}\n`);
+    write(stdout, `${stringifyJson({ ok: false, error: { code, message, remediation: known ? error.remediation ?? null : null } })}\n`);
   } else {
     // Messages can embed repository/config-controlled text (paths, branch names, git stderr): strip
     // terminal control sequences before anything reaches the user's terminal. JSON mode needs no
-    // such step (JSON.stringify escapes control characters).
+    // such step (stringifyJson escapes control characters).
     write(stderr, `Asterweave ${sanitizeForTerminal(area)} error: ${sanitizeForTerminal(message)}\n`);
     if (known && error.remediation) write(stderr, `${sanitizeForTerminal(redactText(error.remediation).text)}\n`);
   }

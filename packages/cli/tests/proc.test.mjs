@@ -9,7 +9,7 @@ import { waitFor } from "./repo-fixture.mjs";
 
 const made = [];
 const tempRoot = (prefix) => {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), prefix)));
   made.push(dir);
   return dir;
 };

@@ -227,7 +227,7 @@ test("claude not installed -> CLAUDE_NOT_INSTALLED, nothing spawned", async () =
 test("claude installed only as claude.cmd -> CLAUDE_SHELL_SHIM_ONLY, nothing spawned", async () => {
   const sandbox = makeSandbox();
   const spawn = claudeSpawn({});
-  const probe = await probeClaude({ env: sandbox.env, spawn, platform: "win32", cwd: sandbox.userDir, exists: installed("claude.cmd") });
+  const probe = await probeClaude({ env: { ...sandbox.env, PATH: "C:\\aw-bin" }, spawn, platform: "win32", cwd: sandbox.userDir, exists: installed("claude.cmd") });
   assert.equal(probe.code, "CLAUDE_SHELL_SHIM_ONLY");
   assert.equal(spawn.calls.length, 0);
 });
