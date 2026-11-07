@@ -30,6 +30,7 @@ import { EXIT_CODES_TEXT } from "./commands/help.mjs";
  * @property {(ctx: CommandContext) => number | void | Promise<number | void>} handler  Returns an exit code (default 0).
  * @property {string} [summary]       One-line description shown by `help`.
  * @property {string[]} [boolean]     Option names that never take a value (see parseArgs).
+ * @property {boolean} [hidden]       Hidden commands dispatch normally but are not listed by `help` / the usage text.
  * @property {string[]} [options]     Every option name the command accepts (without `--`); an option outside
  *                                    this list (and the global `help`/`version`) is a usage error. When omitted
  *                                    the command does not validate option names.
@@ -42,10 +43,10 @@ export const commands = new Map();
  * Register (or replace) a command.
  * @param {string} name
  * @param {CommandDefinition['handler']} handler
- * @param {{summary?: string, boolean?: string[], options?: string[]}} [meta]
+ * @param {{summary?: string, boolean?: string[], options?: string[], hidden?: boolean}} [meta]
  */
 export function registerCommand(name, handler, meta = {}) {
-  commands.set(name, { handler, summary: meta.summary ?? "", boolean: meta.boolean ?? [], options: meta.options });
+  commands.set(name, { handler, summary: meta.summary ?? "", boolean: meta.boolean ?? [], options: meta.options, hidden: meta.hidden === true });
 }
 
 // The default registry carries every Phase A command (help, launch, doctor, repo, auth, config, trust).
@@ -67,7 +68,7 @@ export function readVersion() {
  */
 export function usageText(registry = commands) {
   const lines = ["Usage: asterweave <command> [options]", "", "Commands:"];
-  const rows = [["help [command]", "Show this help"], ...[...registry.entries()].filter(([name]) => name !== "help").map(([name, def]) => [name, def.summary])];
+  const rows = [["help [command]", "Show this help"], ...[...registry.entries()].filter(([name, def]) => name !== "help" && def.hidden !== true).map(([name, def]) => [name, def.summary])];
   const width = Math.max(...rows.map(([name]) => name.length));
   for (const [name, summary] of rows) lines.push(`  ${name.padEnd(width)}  ${summary}`.trimEnd());
   lines.push("", "Options:", "  -h, --help     Show help", "  -v, --version  Print the version");

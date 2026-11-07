@@ -15,6 +15,7 @@ import { CliError, EXIT } from "./exit-codes.mjs";
 import { HOST_PATTERN } from "./host.mjs";
 import { userFilePath } from "./paths.mjs";
 import { isSecretKeyName, redactDeep, sanitizeForTerminal } from "./redact.mjs";
+import { validateHookEntries } from "./runtime/hooks.mjs";
 import { parseJsonText, readJson, StoreError } from "./store.mjs";
 import { assertTrusted, safeTrustStatus } from "./trust.mjs";
 
@@ -164,7 +165,7 @@ function readUserLayer(file, fs) {
   return { exists: true, values, unknown };
 }
 
-const ADAPTER_TOP_LEVEL = new Set(["version", "provider", "routing", "completion", "handoff", "autoContinue", "qualityGates"]);
+const ADAPTER_TOP_LEVEL = new Set(["version", "provider", "routing", "completion", "handoff", "autoContinue", "qualityGates", "hooks"]);
 
 /** Light structural validation of the repository adapter (the full JSON Schema lives in the plugin). */
 function validateAdapter(data, file) {
@@ -179,6 +180,11 @@ function validateAdapter(data, file) {
     if (data.provider.workItems !== undefined && !WORK_ITEM_PROVIDERS.includes(data.provider.workItems)) {
       throw new ConfigError(`${file}: provider.workItems must be one of ${WORK_ITEM_PROVIDERS.join(", ")}.`, { key: "provider.workItems", origin });
     }
+  }
+  if (data.hooks !== undefined) {
+    // Executable (hook commands): only validated here; they are loaded solely for a trusted repository (runtime/hooks.mjs).
+    const issues = validateHookEntries(data.hooks, "hooks");
+    if (issues.length > 0) throw new ConfigError(`${file}: invalid hooks: ${issues.slice(0, 3).join("; ")}.`, { key: "hooks", origin });
   }
   if (data.qualityGates !== undefined) {
     if (!isPlainObject(data.qualityGates)) throw new ConfigError(`${file}: 'qualityGates' must be an object.`, { key: "qualityGates", origin });

@@ -38,6 +38,19 @@ export const USER_FILES = Object.freeze({
   repo: "repo.json",
 });
 
+/** Directory (inside the user directory) holding run state: `runs/<repoDir>/<runId>/`. */
+export const RUNS_DIR_NAME = "runs";
+
+/**
+ * Absolute path of the directory that holds every run (`<userDir>/runs`). Separate from USER_FILES
+ * because it is a directory, not a file.
+ * @param {Parameters<typeof resolveUserDir>[0]} [options]
+ */
+export function runsDir(options) {
+  const platform = options?.platform ?? process.platform;
+  return (platform === "win32" ? path.win32 : path.posix).join(resolveUserDir(options), RUNS_DIR_NAME);
+}
+
 /**
  * Absolute path of a named user file (`config`, `credentials`, `trust`, `repo`).
  * @param {keyof typeof USER_FILES} name

@@ -152,6 +152,7 @@ Run `/asterweave:scaffold` when adopting a repository or when its architecture/t
 | `/asterweave:daily` | Triage assigned work, read-only |
 | `/asterweave:doctor` | Diagnose plugin/repository health |
 | `asterweave` (CLI, preview) | Standalone terminal CLI: GitHub sign-in, repository connect, `doctor`, `config`, `trust` — run from `packages/cli`; no agent loop yet |
+| `asterweave run show\|approve\|abort` (CLI, preview) | Inspect, approve or abort a persisted workflow run (graphs, guard, approvals, hooks). Phase B is simulated: no model calls and no real tool execution; starting a run is a hidden development command |
 
 **[Complete command reference →](https://anjotadena.github.io/asterweave/commands/overview)**
 

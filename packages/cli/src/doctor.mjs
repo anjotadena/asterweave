@@ -217,6 +217,7 @@ function describeFindings(findings) {
     [count("command"), "quality-gate command"],
     [count("settings"), "Claude settings file"],
     [count("mcp"), "MCP server config"],
+    [count("hook"), "repository hook"],
   ].filter(([n]) => n > 0).map(([n, label]) => plural(n, label));
   return parts.length > 0 ? parts.join(", ") : "no executable config detected";
 }

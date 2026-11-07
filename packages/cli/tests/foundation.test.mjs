@@ -31,7 +31,7 @@ function sink() {
 // --- exit codes -----------------------------------------------------------------------------
 
 test("exit codes match the documented table", () => {
-  assert.deepEqual({ ...EXIT }, { OK: 0, ERROR: 1, USAGE: 2, AUTH: 3, TRUST: 4, CONFIG: 5, INTERRUPTED: 130 });
+  assert.deepEqual({ ...EXIT }, { OK: 0, ERROR: 1, USAGE: 2, AUTH: 3, TRUST: 4, CONFIG: 5, APPROVAL_REQUIRED: 6, POLICY_DENIED: 7, INTERRUPTED: 130 });
   assert.ok(Object.isFrozen(EXIT));
   const error = new UsageError("bad");
   assert.equal(error.exitCode, 2);

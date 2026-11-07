@@ -435,16 +435,26 @@ export function assertTrusted(repoPath, purpose, options = {}) {
   });
 }
 
-/** Quality-gate command findings in the text of .claude/asterweave.json (none when it does not parse). */
+/**
+ * Quality-gate command and repository hook findings in the text of .claude/asterweave.json (none when it does not
+ * parse). Hooks are executable config: every entry of the `hooks` key is a finding (field names only, never the argv).
+ */
 function gateFindings(text) {
   const found = [];
   try {
-    const gates = JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text)?.qualityGates?.required;
+    const adapter = JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
+    const gates = adapter?.qualityGates?.required;
     if (Array.isArray(gates)) {
       gates.forEach((gate, index) => {
         if (gate && typeof gate === "object" && "command" in gate) {
           found.push({ field: `qualityGates.required[${index}].command`, file: ADAPTER_FILE, kind: "command" });
         }
+      });
+    }
+    const hooks = adapter?.hooks;
+    if (Array.isArray(hooks)) {
+      hooks.forEach((_hook, index) => {
+        found.push({ field: `hooks[${index}].argv`, file: ADAPTER_FILE, kind: "hook" });
       });
     }
   } catch {

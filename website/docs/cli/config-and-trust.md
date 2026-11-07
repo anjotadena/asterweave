@@ -33,8 +33,9 @@ Only the keys below exist. Anything else in `config.json` is listed as ignored a
 | `ui.color` | `auto`, `always`, `never` | `auto` | `ASTERWEAVE_UI_COLOR` | `--ui-color` | Applied to the text output of `launch` and `doctor`. `never` turns color off; `always` forces it on even when stdout is not a TTY; `auto` colors only on a TTY. `NO_COLOR` (when set and non-empty) always wins, even over `always` |
 | `provider.workItems` | `github`, `azure-devops`, `none` | `none` | `ASTERWEAVE_PROVIDER_WORKITEMS` | none | May also come from the repository adapter. Shown only: nothing in the CLI uses it yet. The plugin's skills treat an absent value as `github`, but the CLI's own default for this key is `none` |
 | `qualityGates.required` | array of `id`, `command`, `source` (and optional `timeoutSeconds`) | `[]` | none | none | **Executable.** Repository adapter only; not settable in `config.json`, env, or flags. Applied only for a trusted repository |
+| `hooks` | array of hook entries (`id`, `event`, `argv`, `kind`, `timeoutMs`, `onFailure`) | none | none | none | **Executable.** Repository adapter only (user hooks live in `hooks.json`, see [Hooks](/cli/hooks)). Validated on every read; loaded and run only for a trusted repository. Not shown by `config show` |
 
-Beyond these keys, the repository's `.claude/asterweave.json` is checked for `"version": 1` and for unknown top-level properties (either one is a configuration error, exit 5). The full schema is enforced by the plugin; the other adapter sections (`routing`, `completion`, `handoff`, `autoContinue`) are accepted and ignored by the CLI.
+Beyond these keys, the repository's `.claude/asterweave.json` is checked for `"version": 1` and for unknown top-level properties (either one is a configuration error, exit 5). The full schema is enforced by the plugin; the other adapter sections (`routing`, `completion`, `handoff`, `autoContinue`) are accepted and ignored by the CLI. The `hooks` section is validated (an invalid entry is a configuration error, exit 5) and used by [`run`](/cli/runs) only when the repository is trusted.
 
 ### A user `config.json`
 
@@ -113,7 +114,7 @@ Note that `provider.workItems` (not executable) is applied from the untrusted re
 
 ### `config show --strict`
 
-By default `config show` exits 0 for an untrusted repository and reports the skipped executable keys. With `--strict` it instead exits **4** (`TRUST_REQUIRED`) when the repository has executable config (a quality-gate command, `.claude/settings*.json`, or `.mcp.json`) and is not trusted, writes nothing to stdout, and prints `asterweave trust grant --path <path>` as the remediation (the path is quoted when it contains anything but plain path characters: single quotes on macOS and Linux, double quotes on Windows so the command works in both cmd.exe and PowerShell; a Windows path that either shell would still expand, for example one containing `%`, `!`, `$` or a backtick, is never put in the command: the command shows `<path>` and the path follows on its own line with the note to quote it for your shell). With `--json` the usual error envelope is printed. A trusted repository, or one with no executable config, exits 0 as normal. The check is the same trust check later operations use, and it never prints command text.
+By default `config show` exits 0 for an untrusted repository and reports the skipped executable keys. With `--strict` it instead exits **4** (`TRUST_REQUIRED`) when the repository has executable config (a quality-gate command, a repository hook, `.claude/settings*.json`, or `.mcp.json`) and is not trusted, writes nothing to stdout, and prints `asterweave trust grant --path <path>` as the remediation (the path is quoted when it contains anything but plain path characters: single quotes on macOS and Linux, double quotes on Windows so the command works in both cmd.exe and PowerShell; a Windows path that either shell would still expand, for example one containing `%`, `!`, `$` or a backtick, is never put in the command: the command shows `<path>` and the path follows on its own line with the note to quote it for your shell). With `--json` the usual error envelope is printed. A trusted repository, or one with no executable config, exits 0 as normal. The check is the same trust check later operations use, and it never prints command text.
 
 ## User directory
 
@@ -142,10 +143,11 @@ Writes are atomic (temporary file then rename, retried on Windows file locks), d
 | Source | Why it matters |
 | --- | --- |
 | `qualityGates.required[].command` in `.claude/asterweave.json` | Shell commands that a later phase will run as quality gates |
+| `hooks[]` in `.claude/asterweave.json` | Programs that [`asterweave run`](/cli/runs) starts around the steps of a run (one finding per entry, reported as kind `hook` with the field `hooks[0].argv`; the command text is never printed) |
 | `.claude/settings.json` and `.claude/settings.local.json` | When `claude` runs in the repository it loads hooks, environment variables, helpers, and permissions from them |
 | `.mcp.json` | When `claude` runs in the repository it may start the MCP servers declared there |
 
-In Phase A, **none of these is executed by Asterweave**. They are detected, counted by file name and kind (never printing a command's text), and gated. Trust currently changes one thing in the output: whether `config show` applies `qualityGates.required`. It also drives the `repo.trust` check in `doctor`, the trust line in `repo status`, and a warning in the launch banner when an untrusted repository has executable files. Exit code 4 is returned by `config show --strict` for an untrusted repository with executable config; nothing else in Phase A returns it.
+**None of these is executed by the commands described on this page** (`config`, `trust`, `doctor`, `repo`, the launch). The one place Asterweave starts repository-defined programs is a [run](/cli/runs), and then only the repository **hooks**, and only for a trusted repository; quality-gate commands, settings and MCP servers are still not run by Asterweave. They are detected, counted by file name and kind (never printing a command's text), and gated. Trust changes whether `config show` applies `qualityGates.required` and whether a run loads the repository `hooks`. It also drives the `repo.trust` check in `doctor`, the trust line in `repo status`, and a warning in the launch banner when an untrusted repository has executable files. Exit code 4 is returned by `config show --strict` for an untrusted repository with executable config; nothing else in Phase A returns it.
 
 ## Trust store
 
@@ -202,6 +204,7 @@ Hash        0000000000000000000000000000000000000000000000000000000000000000
 
 Executable repository config found:
    1  quality-gate command(s)  in .claude/asterweave.json
+   2  repository hook(s)       in .claude/asterweave.json
 
 Review these files, then run: asterweave trust grant --path C:\work\widgets
 ```
