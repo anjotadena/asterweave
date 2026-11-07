@@ -21,6 +21,7 @@ import { repoCommand, repoCommandMeta } from "./repo.mjs";
 import { mcpCommand, mcpCommandMeta } from "./mcp.mjs";
 import { modelCommand, modelCommandMeta } from "./model.mjs";
 import { runCommand, runCommandMeta } from "./run.mjs";
+import { sessionCommand, sessionCommandMeta } from "./session.mjs";
 import { trustCommand, trustCommandMeta } from "./trust.mjs";
 import { usageCommand, usageCommandMeta } from "./usage.mjs";
 
@@ -70,6 +71,7 @@ export function registerAllCommands(registry, { loadLaunch } = {}) {
   add("config", configCommand, configCommandMeta);
   add("trust", trustCommand, trustCommandMeta);
   add("run", runCommand, runCommandMeta);
+  add("session", sessionCommand, sessionCommandMeta);
   add("usage", usageCommand, usageCommandMeta);
   add("model", modelCommand, modelCommandMeta);
   add("mcp", mcpCommand, mcpCommandMeta);
