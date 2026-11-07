@@ -226,6 +226,16 @@ test("approval self-grant: asterweave run approve and writes under <userDir>/run
   assert.equal(evaluate({ type: "tool", tool: { name: "write", input: { path: join(userDir, "runs", "r1", "run.json") } } }, ctxFor()).reason, "APPROVAL_SELF_GRANT");
 });
 
+test("approval self-grant: asterweave mcp test --approve is denied, plain mcp test is not a self-grant", () => {
+  for (const command of ["asterweave mcp test files --approve abcdef123456", "asterweave mcp test files --approve=abcdef123456", "node packages/cli/bin/asterweave.mjs --json mcp test files --approve abcdef123456"]) {
+    const decision = shell(command);
+    assert.equal(decision.decision, "deny", command);
+    assert.equal(decision.reason, "APPROVAL_SELF_GRANT", command);
+  }
+  assert.notEqual(shell("asterweave mcp test files").reason, "APPROVAL_SELF_GRANT");
+  assert.notEqual(shell("asterweave mcp list").reason, "APPROVAL_SELF_GRANT");
+});
+
 test("UNPARSEABLE_COMMAND asks when supervised and denies when autonomous", () => {
   const commands = ["echo $(whoami)", "echo `whoami`", 'echo "$(id)"', "bash -c 'ls'", "sh -c ls", "zsh -lc 'ls'", "powershell -EncodedCommand AAAA", "pwsh -Command Get-ChildItem", "cmd /c dir",
     "echo 'unbalanced", 'echo "unbalanced', "eval ls", "cat <<EOF\nhi\nEOF", "xargs rm", "cat <(ls)", "$CMD args"];

@@ -13,7 +13,8 @@
 //                                           // when "push-branch" is listed in operations (an unscoped push is never pre-authorized)
 //       "tools":      ["shell", "read", "write", "edit", "git"],
 //       "operations": ["commit", "push-branch", "open-pr"],
-//       "budgets":    { "iterations": 20, "toolCalls": 200, "tokens": 0, "wallMs": 1800000 } } }
+//       "budgets":    { "iterations": 20, "toolCalls": 200, "tokens": 0, "wallMs": 1800000,   // 0 = unlimited
+//                        "perNode": { "tokens": 50000, "toolCalls": 40, "iterations": 10 } } } }  // optional, each node alike
 //
 // merge / deploy / publish / destructive commands / default-branch pushes are not grantable here at all:
 // they always need a scoped approval (the validator rejects `merge` or `deploy` in `tools`/`operations`).
@@ -42,7 +43,7 @@ export class PolicyError extends CliError {
 /** Operations a policy may pre-authorize. Everything else (merge, deploy, publish, default-branch push) needs a scoped approval. */
 export const POLICY_OPERATIONS = Object.freeze(["commit", "push-branch", "open-pr"]);
 /** Tools a policy may allow for unattended runs. `merge` and `deploy` are never grantable. */
-export const POLICY_TOOLS = Object.freeze(["shell", "read", "write", "edit", "git"]);
+export const POLICY_TOOLS = Object.freeze(["shell", "read", "write", "edit", "git", "api", "mcp"]);
 /** Default budgets (spec: 20 iterations per attempt, 30 minutes wall per run, 200 tool calls per run). */
 export const DEFAULT_BUDGETS = Object.freeze({ iterations: 20, toolCalls: 200, tokens: null, wallMs: 30 * 60 * 1000 });
 /** The policy used when no policy.json exists. */
@@ -77,6 +78,8 @@ function checkAllowCommands(value, issues) {
 
 const WORKFLOW_ID = /^[a-z][a-z0-9-]{0,39}@[1-9][0-9]{0,5}$/;
 const BUDGET_KEYS = ["iterations", "toolCalls", "tokens", "wallMs"];
+/** Budgets that can also be set per node (`autonomous.budgets.perNode`): iterations are per attempt, the others per run. */
+export const NODE_BUDGET_KEYS = Object.freeze(["tokens", "toolCalls", "iterations"]);
 
 /**
  * Canonical JSON: object keys sorted recursively, no insignificant whitespace. Throws on values that
@@ -161,7 +164,15 @@ export function validatePolicy(policy) {
         if (!isObject(block.budgets)) issues.push("autonomous.budgets must be an object");
         else {
           for (const [key, value] of Object.entries(block.budgets)) {
-            if (!BUDGET_KEYS.includes(key)) issues.push(`autonomous.budgets.${key} is not a known budget`);
+            if (key === "perNode") {
+              if (!isObject(value)) issues.push("autonomous.budgets.perNode must be an object");
+              else {
+                for (const [nodeKey, limit] of Object.entries(value)) {
+                  if (!NODE_BUDGET_KEYS.includes(nodeKey)) issues.push(`autonomous.budgets.perNode.${nodeKey} is not a known per-node budget`);
+                  else if (!Number.isInteger(limit) || limit < 0 || limit > 1e9) issues.push(`autonomous.budgets.perNode.${nodeKey} must be an integer between 0 and 1000000000`);
+                }
+              }
+            } else if (!BUDGET_KEYS.includes(key)) issues.push(`autonomous.budgets.${key} is not a known budget`);
             else if (!Number.isInteger(value) || value < 0 || value > 1e9) issues.push(`autonomous.budgets.${key} must be an integer between 0 and 1000000000`);
           }
         }
@@ -255,5 +266,17 @@ export function effectiveMode(policy, { workflow, repoKey, branch } = {}) {
  * @returns {{iterations: number, toolCalls: number, tokens: number|null, wallMs: number}}
  */
 export function resolveBudgets(policy) {
-  return { ...DEFAULT_BUDGETS, ...(policy?.autonomous?.budgets ?? {}) };
+  const { perNode: _perNode, ...limits } = policy?.autonomous?.budgets ?? {};
+  return { ...DEFAULT_BUDGETS, ...limits };
+}
+
+/**
+ * Per-node budgets: `autonomous.budgets.perNode` (tokens, toolCalls, iterations; absent or 0 = unlimited). They apply to
+ * every node alike, in BOTH modes (like resolveBudgets, they come from the policy block whatever the effective mode is).
+ * Without a policy block there are none (DEFAULT_BUDGETS has no per-node limits).
+ * @returns {{tokens?: number, toolCalls?: number, iterations?: number}}
+ */
+export function resolveNodeBudgets(policy) {
+  const perNode = policy?.autonomous?.budgets?.perNode;
+  return isObject(perNode) ? { ...perNode } : {};
 }

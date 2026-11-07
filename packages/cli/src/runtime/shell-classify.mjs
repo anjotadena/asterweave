@@ -2388,6 +2388,9 @@ export function classifyShell(command, options = {}) {
       const plain = words.slice(cli + 1).filter((word) => !word.startsWith("-")).map((word) => word.toLowerCase());
       const run = plain.indexOf("run");
       if (run >= 0 && plain.slice(run + 1).includes("approve")) add("APPROVAL_SELF_GRANT", "run-approve", "approvals can only be granted by a person (terminal prompt or CLI flags), never by the run itself");
+      // `asterweave mcp test <server> --approve <hash>` records an MCP approval the same way.
+      const mcp = plain.indexOf("mcp");
+      if (mcp >= 0 && plain.slice(mcp + 1).includes("test") && words.slice(cli + 1).some((word) => /^--approve(=|$)/i.test(word))) add("APPROVAL_SELF_GRANT", "mcp-approve", "MCP approvals can only be granted by a person (terminal prompt or CLI flags), never by the run itself");
     }
     // Path arguments.
     const inPlace = name === "sed" && args.some((arg) => /^-[A-Za-z]*i/.test(arg) || arg.startsWith("--in-place"));

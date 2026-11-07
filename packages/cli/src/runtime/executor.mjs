@@ -10,7 +10,9 @@
 //     decide(ctx, observation): Promise<unknown>         the next action (validated by validateAction)
 //     verify?(ctx, result): Promise<Verification>        optional check of a tool result
 //     describe?(ctx, action): {idempotent?, delayMs?}    optional hints for an action
-//     usage?(ctx): {tokens: number | null} | null        optional token accounting (null = unknown)
+//     usage?(ctx): {tokens?, inputTokens?, outputTokens?, cacheReadTokens?, cacheCreationTokens?, contextTokens?, model?} | null
+//                                                        optional accounting; each counter is a non-negative integer or
+//                                                        null (unknown, never 0). See usage.mjs.
 //   }
 //   ctx = { runId, goal, node, attempt, step, iteration, signal, feedback, lastResult, approvals }
 //   Verification = { ok: boolean, reason?: string, evidence?: Evidence[] }
