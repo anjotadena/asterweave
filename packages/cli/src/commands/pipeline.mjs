@@ -27,7 +27,7 @@ import { assertRunExists, recordToRun, targetProblem } from "../runtime/pipeline
 import { unionRequired, applyObservations, applyPull, evaluate, initialState, matches, matchesLoose, normalizeCheck, normalizePull, normalizeRun, safeText } from "../runtime/pipeline/state.mjs";
 import { loadPipeline, openPipelineSession, parseRepoSlug, pipelineDir } from "../runtime/pipeline/store.mjs";
 import { createTokenReader } from "../runtime/pipeline/token.mjs";
-import { resolveHost, seams, stringOption } from "./shared.mjs";
+import { interruptSignal, resolveHost, seams, stringOption } from "./shared.mjs";
 
 export const pipelineCommandMeta = Object.freeze({
   summary: "Monitor a pull request and its pipeline; closable verdict; explicit diagnosis (no model calls)",
@@ -262,28 +262,6 @@ async function statusCommand(ctx) {
 }
 
 // watch ----------------------------------------------------------------------------------------
-
-function interruptSignal(ctx) {
-  const controller = new AbortController();
-  const proc = ctx.proc ?? process;
-  const onSignal = () => {
-    if (controller.signal.aborted) proc.exit?.(EXIT.INTERRUPTED);
-    else controller.abort();
-  };
-  const onParent = () => controller.abort();
-  if (ctx.signal?.aborted) controller.abort();
-  else ctx.signal?.addEventListener("abort", onParent, { once: true });
-  proc.on?.("SIGINT", onSignal);
-  proc.on?.("SIGTERM", onSignal);
-  return {
-    signal: controller.signal,
-    dispose() {
-      proc.removeListener?.("SIGINT", onSignal);
-      proc.removeListener?.("SIGTERM", onSignal);
-      ctx.signal?.removeEventListener("abort", onParent);
-    },
-  };
-}
 
 async function runDirectory(ctx, runId) {
   const platform = ctx.platform ?? process.platform;

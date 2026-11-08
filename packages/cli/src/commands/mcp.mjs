@@ -24,17 +24,18 @@ import { resolveBinary } from "../proc.mjs";
 import { sanitizeForTerminal, sanitizeLines } from "../redact.mjs";
 import { McpError, startMcpClient } from "../runtime/tools/mcp-client.mjs";
 import {
-  approvalState, credentialRef, cwdLabel, definitionHashOf, definitionOf, displayServer, lintServer, loadMcpServers, readApproval, resolveServerEnv, saveApproval,
+  approvalState, credentialRef, cwdLabel, envReference, definitionHashOf, definitionOf, displayServer, lintServer, loadMcpServers, readApproval, resolveServerEnv, saveApproval,
 } from "../runtime/tools/mcp-config.mjs";
 import { descriptorHash } from "../runtime/tools/descriptor.mjs";
 import { assertTrusted, repositoryIdentity, safeTrustStatus } from "../trust.mjs";
 import { createTerminal } from "../tui/terminal.mjs";
 import { askYesNo, withTerminal } from "../tui/session.mjs";
 import { defaultRepoPath, isInteractive, seams, stringOption } from "./shared.mjs";
+import { ADMIN_HELP, ADD_USAGE, mcpAddCommand, mcpEnableDisable, mcpRemoveCommand, MCP_ADMIN_BOOLEAN, MCP_ADMIN_OPTIONS, REMOVE_USAGE, rejectOptions } from "./mcp-admin.mjs";
 
-export const mcpCommandMeta = Object.freeze({ summary: "List, inspect, validate and test MCP server definitions", boolean: ["json"], options: ["json", "approve", "source", "path"] });
+export const mcpCommandMeta = Object.freeze({ summary: "List, inspect, validate and test MCP server definitions", boolean: ["json", ...MCP_ADMIN_BOOLEAN], options: ["json", "approve", "source", "path", ...MCP_ADMIN_OPTIONS] });
 
-const USAGE = "Usage: asterweave mcp list [--json] | inspect <name> [--source project|user|plugin] [--json] | validate [--json] | test <name> [--source s] [--approve <definitionHash>] [--json]";
+const USAGE = `Usage: asterweave mcp list [--json] | inspect <name> [--source project|user|plugin] [--json] | validate [--json] | test <name> [--source s] [--approve <definitionHash>] [--json] | ${ADD_USAGE.replace("asterweave mcp ", "")} | ${REMOVE_USAGE.replace("asterweave mcp ", "")}`;
 
 export const mcpHelpText = `${[
   "asterweave mcp - MCP server definitions (parse-only except `test`)",
@@ -43,11 +44,13 @@ export const mcpHelpText = `${[
   "",
   "  list      servers from .mcp.json, the user Claude file and plugin caches, with trust/approval state; never starts a server",
   "  inspect   one definition: redacted, descriptor hash, what a spawn would run, warnings; never starts a server",
-  "  validate  schema, duplicate names, secrets, env values that are not ${cred:NAME} references; exit 5 when problems are found",
+  "  validate  schema, duplicate names, secrets, env values that are not ${NAME} or ${cred:NAME} references; exit 5 when problems are found",
   "  test      the ONLY command that starts a server: initialize + tools/list, never tools/call; needs repository trust and an approval given at a terminal prompt (--approve <hash> only pins what you reviewed)",
   "",
+  ...ADMIN_HELP,
+  "",
   "Source precedence between project, user and plugin definitions is not verified here: they are listed separately, never merged.",
-  "Exit codes: 0 ok · 1 server unavailable or error · 2 usage · 4 repository not trusted · 5 validate found problems · 6 approval required · 7 refused (agent environment markers, wrong confirmation) · 130 interrupted",
+  "Exit codes: 0 ok · 1 server unavailable or error · 2 usage · 4 repository not trusted (also: add/remove --scope repo applied and verified, repository now untrusted) · 5 validate found problems · 6 approval required (mcp test) · 7 refused (agent environment markers, wrong confirmation) · 130 interrupted",
 ].join("\n")}\n`;
 
 const write = (stream, text) => stream.write(text);
@@ -121,7 +124,7 @@ function inspectServer(ctx, name) {
   const server = pick(c, name, ctx);
   const r = row(server, c);
   const warnings = lintServer(server, { env: c.options.env, platform: c.options.platform, exists: ctx.exists }).map((f) => ({ level: f.level, code: f.code, message: f.message }));
-  const spawnPlan = server.transport === "stdio" ? { command: r.command, args: r.args, cwd: server.source === "project" ? c.identity.realpath : "a new empty temporary directory", envRefs: Object.fromEntries(Object.entries(server.env).map(([k, v]) => [safe(k).slice(0, 60), credentialRef(v) ?? "[literal]"])), shell: false, note: "display only; nothing was started" } : null;
+  const spawnPlan = server.transport === "stdio" ? { command: r.command, args: r.args, cwd: server.source === "project" ? c.identity.realpath : "a new empty temporary directory", envRefs: Object.fromEntries(Object.entries(server.env).map(([k, v]) => [safe(k).slice(0, 60), envReference(v) === null ? "[literal]" : envReference(v).kind === "var" ? `env:${envReference(v).name}` : envReference(v).name])), shell: false, note: "display only; nothing was started" } : null;
   const view = { ...r, spawn: spawnPlan, warnings };
   if (ctx.options?.json === true) {
     write(ctx.stdout, `${stringifyJson({ ok: true, server: view })}\n`);
@@ -134,7 +137,7 @@ function inspectServer(ctx, name) {
     `env: ${Object.keys(r.env).length === 0 ? "(none)" : Object.entries(r.env).map(([k, v]) => `${k} <- ${v}`).join(", ")}`,
     `definition hash: ${r.definitionHash}`,
     `trust: ${r.trust}  approval: ${r.approval}  auth: ${r.auth}  health: ${r.health}`,
-    spawnPlan ? `a spawn would run: ${spawnPlan.command} ${spawnPlan.args.join(" ")} (cwd ${spawnPlan.cwd}, shell: no, env: PATH + ${Object.entries(spawnPlan.envRefs).map(([k, v]) => `${k} <- ${v === "[literal]" ? v : `$` + `{cred:${v}}`}`).join(", ") || "nothing else"})` : "a spawn is not supported for this transport in this build",
+    spawnPlan ? `a spawn would run: ${spawnPlan.command} ${spawnPlan.args.join(" ")} (cwd ${spawnPlan.cwd}, shell: no, env: PATH + ${Object.entries(spawnPlan.envRefs).map(([k, v]) => `${k} <- ${v === "[literal]" ? v : server.env[Object.keys(server.env).find((key) => safe(key).slice(0, 60) === k)]}`).join(", ") || "nothing else"})` : "a spawn is not supported for this transport in this build",
     ...warnings.map((w) => `${w.level === "error" ? "Problem" : "Warning"}: ${w.message}`),
   ];
   write(ctx.stdout, `${sanitizeLines(lines.join("\n"))}\n`);
@@ -178,7 +181,7 @@ function unavailable(error) {
 
 const hexPrefix = (value) => typeof value === "string" && /^[0-9a-f]{12,64}$/i.test(value);
 
-/** `KEY <- ${cred:NAME}` lines: which credential each env key would receive (names only, never values). */
+/** `KEY <- ${NAME}` / `KEY <- ${cred:NAME}` lines: which variable each env key would receive (names only, never values). */
 const envPlan = (server) => Object.entries(server.env).sort(([a], [b]) => (a < b ? -1 : 1)).map(([key, value]) => `  ${safe(key).slice(0, 60)} <- ${credentialRef(value) === null ? "[literal value: refused]" : value}`);
 
 async function testServer(ctx, name) {
@@ -226,7 +229,7 @@ async function testServer(ctx, name) {
   }
 
   const resolved = resolveServerEnv(server.env, (ref) => ctx.env?.[ref]);
-  if (resolved.literal.length > 0) throw new CliError(`env ${resolved.literal.map((k) => safe(k).slice(0, 40)).join(", ")} ${resolved.literal.length > 1 ? "are" : "is"} not a credential reference.`, { code: "MCP_ENV_LITERAL", exitCode: EXIT.ERROR, remediation: "Write env values as ${cred:NAME}; nothing was started." });
+  if (resolved.literal.length > 0) throw new CliError(`env ${resolved.literal.map((k) => safe(k).slice(0, 40)).join(", ")} ${resolved.literal.length > 1 ? "are" : "is"} not a credential reference.`, { code: "MCP_ENV_LITERAL", exitCode: EXIT.ERROR, remediation: "Write env values as ${NAME} or ${cred:NAME}; nothing was started." });
   if (resolved.missing.length > 0) throw new CliError(`No value for the credential reference(s) of env ${resolved.missing.map((k) => safe(k).slice(0, 40)).join(", ")}.`, { code: "MCP_CREDENTIAL_MISSING", remediation: "Set the referenced environment variable(s); nothing was started." });
   const found = resolveBinary(server.command, { env: c.options.env ?? process.env, platform: c.options.platform, ...(ctx.exists ? { exists: ctx.exists } : {}) });
   if (!found.path) throw new CliError(found.reason === "SHELL_SHIM_ONLY" ? "The command resolves only to a .cmd/.bat shim, which is not started (no shell is used)." : "The server command was not found on PATH.", { code: "MCP_COMMAND_MISSING", remediation: found.reason === "SHELL_SHIM_ONLY" ? "Point the definition at the real executable." : "Install the server or fix its command; nothing was started." });
@@ -284,17 +287,28 @@ async function testServer(ctx, name) {
 export async function mcpCommand(ctx) {
   const [sub, ...rest] = ctx.positionals ?? [];
   switch (sub) {
+    case "add":
+      return mcpAddCommand(ctx, rest);
+    case "remove":
+      return mcpRemoveCommand(ctx, rest);
+    case "enable":
+    case "disable":
+      return mcpEnableDisable(sub);
     case "list":
       noExtra(rest);
+      rejectOptions(ctx, MCP_ADMIN_OPTIONS, sub);
       return listServers(ctx);
     case "validate":
       noExtra(rest);
+      rejectOptions(ctx, MCP_ADMIN_OPTIONS, sub);
       return validateServers(ctx);
     case "inspect":
       noExtra(rest.slice(1));
+      rejectOptions(ctx, MCP_ADMIN_OPTIONS, sub);
       return inspectServer(ctx, rest[0]);
     case "test":
       noExtra(rest.slice(1));
+      rejectOptions(ctx, MCP_ADMIN_OPTIONS, sub);
       return testServer(ctx, rest[0]);
     default:
       throw new UsageError(sub ? `Unknown mcp subcommand '${safe(sub).slice(0, 40)}'.` : "Missing mcp subcommand.", { remediation: USAGE });

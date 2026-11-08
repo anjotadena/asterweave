@@ -1296,6 +1296,85 @@ export function currentBranch(directory) {
 }
 
 const baseName = (word) => word.split(/[\\/]/).pop().toLowerCase();
+const CLAUDE_NAMES = new Set(["claude", "claude-code"]);
+/** Verbs that change MCP / plugin configuration (a deny floor; read-only verbs are absent on purpose). */
+const CONFIG_MUTATIONS = Object.freeze({
+  asterweave: { mcp: new Set(["add", "remove"]), plugin: new Set(["install", "uninstall", "enable", "disable"]) },
+  claude: {
+    mcp: new Set(["add", "remove", "rm", "add-json", "add-from-claude-desktop", "reset-project-choices"]),
+    plugin: new Set(["install", "i", "uninstall", "remove", "rm", "enable", "disable", "update", "prune", "marketplace"]),
+  },
+});
+/** Options of asterweave / claude that take a value: that value is not a verb (used only to FIND the area word). */
+const VALUE_OPTIONS = new Set(["path", "scope", "source", "approve", "transport", "env", "header", "config", "s", "t", "e", "h", "model", "mcp-config", "settings"]);
+/** `node .../node_modules/@anthropic-ai/claude-code/cli.js` IS claude. */
+const CLAUDE_CLI_PATH = /(?:^|[\/])claude-code[\/]cli.m?js$/i;
+const isClaudeWord = (word) => CLAUDE_NAMES.has(commandName(word)) || CLAUDE_CLI_PATH.test(word);
+/** Words split on , and ; too (PowerShell `-ArgumentList 'mcp','add'`), lower case. */
+const splitWords = (list) => list.flatMap((word) => (word.startsWith("-") ? [word] : word.toLowerCase().split(/[,;]+/).filter(Boolean)));
+/** Words without options (option values of the known value options dropped): only to ask whether an area word is present. */
+const plainWords = (list) => {
+  const out = [];
+  const words = splitWords(list);
+  for (let i = 0; i < words.length; i += 1) {
+    if (words[i].startsWith("-")) { if (!words[i].includes("=") && VALUE_OPTIONS.has(words[i].replace(/^-+/, "").toLowerCase())) i += 1; continue; }
+    out.push(words[i]);
+  }
+  return out;
+};
+const UNRESOLVED_WORD = /[$%*?[`]/;
+/**
+ * Does `list` (the words after asterweave / claude) run a mutating verb of one of the areas? The area is the first area word (known value
+ * options are skipped while looking for it). After it, options are skipped together with the one word that may be their value; the first
+ * other word decides: a mutating verb, or a word that cannot be resolved (variable, glob: `mcp $V`, `mcp ad*`) is a mutation; a plain
+ * word that is not a verb (`mcp test add`, `mcp x add`) is not.
+ */
+function runsConfigMutation(list, table) {
+  const words = splitWords(list);
+  let at = -1;
+  for (let i = 0; i < words.length; i += 1) {
+    if (words[i].startsWith("-")) { if (!words[i].includes("=") && VALUE_OPTIONS.has(words[i].replace(/^-+/, "").toLowerCase())) i += 1; continue; }
+    if (Object.hasOwn(table, words[i])) { at = i; break; }
+  }
+  if (at < 0) return false;
+  const verbs = table[words[at]];
+  let afterOption = false;
+  for (let i = at + 1; i < words.length; i += 1) {
+    const word = words[i];
+    if (word.startsWith("-")) { afterOption = !word.includes("="); continue; }
+    if (verbs.has(word) || UNRESOLVED_WORD.test(word)) return true;
+    if (!afterOption) return false;
+    afterOption = false;
+  }
+  return false;
+}
+const AREAS = ["mcp", "plugin", "plugins"];
+const TABLES = Object.freeze({
+  asterweave: { mcp: CONFIG_MUTATIONS.asterweave.mcp, plugin: CONFIG_MUTATIONS.asterweave.plugin },
+  claude: { mcp: CONFIG_MUTATIONS.claude.mcp, plugin: CONFIG_MUTATIONS.claude.plugin, plugins: CONFIG_MUTATIONS.claude.plugin },
+});
+const READ_ONLY_VERBS = new Set(["list", "get", "inspect", "validate", "test", "status", "help", "show"]);
+/** A line whose command word cannot be resolved (variable, Invoke-Expression, eval) that still has an mcp/plugin area followed by anything but a read-only verb. */
+export function unresolvedConfigMutation(text) {
+  const tokens = String(text).toLowerCase().split(/[\s'"`+()&|;,{}]+/).filter(Boolean);
+  for (let i = 0; i < tokens.length; i += 1) {
+    if (!AREAS.includes(tokens[i])) continue;
+    let j = i + 1;
+    while (j < tokens.length && tokens[j].startsWith("-")) j += 1;
+    if (j >= tokens.length) continue;
+    if (!READ_ONLY_VERBS.has(tokens[j])) return true;
+  }
+  return false;
+}
+const UNRESOLVED_COMMAND_RULES = new Set(["command-variable", "invoke-expression", "eval"]);
+const ALL_VERBS = new Set([...CONFIG_MUTATIONS.asterweave.mcp, ...CONFIG_MUTATIONS.asterweave.plugin, ...CONFIG_MUTATIONS.claude.mcp, ...CONFIG_MUTATIONS.claude.plugin].filter((verb) => verb !== "i"));
+/** A line the classifier could not follow that still NAMES claude (or asterweave), an mcp/plugin area and a mutating verb. */
+export function namesConfigMutation(text) {
+  const lower = String(text).toLowerCase();
+  if (!/claude|asterweave/.test(lower)) return false;
+  const words = lower.split(/[^a-z0-9-]+/).filter(Boolean);
+  return AREAS.some((area) => words.includes(area)) && words.some((word) => ALL_VERBS.has(word));
+}
 const commandName = (word) => baseName(word).replace(/\.(?:exe|cmd|bat|com|ps1|mjs|cjs|js)$/, "");
 const VARIABLE_PATTERN = new RegExp(`${DOLLAR_VAR_SOURCE}|%[A-Za-z_][A-Za-z0-9_]*%`);
 const DOLLAR_PATTERN = new RegExp(DOLLAR_VAR_SOURCE);
@@ -2392,6 +2471,20 @@ export function classifyShell(command, options = {}) {
       const mcp = plain.indexOf("mcp");
       if (mcp >= 0 && plain.slice(mcp + 1).includes("test") && words.slice(cli + 1).some((word) => /^--approve(=|$)/i.test(word))) add("APPROVAL_SELF_GRANT", "mcp-approve", "MCP approvals can only be granted by a person (terminal prompt or CLI flags), never by the run itself");
     }
+    // Executable configuration (MCP servers, plugins) is changed by a person, whichever door is used: `asterweave mcp|plugin ...` or `claude mcp|plugin ...` directly.
+    // Words after the area are matched ANYWHERE (an option value such as `--path x add` must not hide the verb); read-only verbs (list, inspect, validate, test, get) stay allowed.
+    const viaXargs = name === "xargs"; // the verb arrives on stdin: any mcp/plugin area is refused whatever the visible verb
+    if (cli >= 0) {
+      const plainAw = plainWords(words.slice(cli + 1));
+      if (viaXargs && AREAS.some((area) => plainAw.includes(area))) add("APPROVAL_SELF_GRANT", "config-mutation", "xargs feeds the verb of an asterweave mcp/plugin command: only a person changes executable configuration");
+      if (runsConfigMutation(words.slice(cli + 1), TABLES.asterweave)) add("APPROVAL_SELF_GRANT", "config-mutation", "MCP servers and plugins are executable configuration: only a person changes them (asterweave mcp add|remove, plugin install|uninstall|enable|disable), never the run itself");
+    }
+    const claudeAt = words.findIndex(isClaudeWord);
+    if (claudeAt >= 0) {
+      const plainCl = plainWords(words.slice(claudeAt + 1));
+      if (viaXargs && AREAS.some((area) => plainCl.includes(area))) add("APPROVAL_SELF_GRANT", "config-mutation", "xargs feeds the verb of a claude mcp/plugin command: only a person changes executable configuration");
+      if (runsConfigMutation(words.slice(claudeAt + 1), TABLES.claude)) add("APPROVAL_SELF_GRANT", "config-mutation", "claude mcp/plugin changes alter executable configuration: only a person makes them, never the run itself");
+    }
     // Path arguments.
     const inPlace = name === "sed" && args.some((arg) => /^-[A-Za-z]*i/.test(arg) || arg.startsWith("--in-place"));
     const writer = WRITERS.has(name) || inPlace || segmentInfo.deleting === true;
@@ -2718,6 +2811,12 @@ export function classifyShell(command, options = {}) {
   } catch (error) {
     if (!(error instanceof BudgetError)) throw error;
     unparseable(`${error.message}; the command is too complex for the guard to review, so it is refused in every mode`, "command-too-complex", true);
+  }
+  // A line the classifier could not resolve (a variable or substitution as the command word, ...) that still names claude, an area and a mutating verb.
+  if (typeof options.asPath !== "string" && findings.some((finding) => finding.code === "UNPARSEABLE_COMMAND" && finding.ruleId !== "not-allow-listed") && !findings.some((finding) => finding.ruleId === "config-mutation") && namesConfigMutation(command)) {
+    add("APPROVAL_SELF_GRANT", "config-mutation", "the line names claude/asterweave, an mcp or plugin area and a mutating verb but cannot be followed; only a person changes executable configuration");
+  } else if (typeof options.asPath !== "string" && findings.some((finding) => UNRESOLVED_COMMAND_RULES.has(finding.ruleId)) && !findings.some((finding) => finding.ruleId === "config-mutation") && unresolvedConfigMutation(command)) {
+    add("APPROVAL_SELF_GRANT", "config-mutation", "the command word cannot be resolved (a variable, Invoke-Expression, eval) and the line has an mcp or plugin area followed by something other than a read-only verb; only a person changes executable configuration");
   }
   return { segments: segmentsOut, findings, operations, mutating };
 }

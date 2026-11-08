@@ -5,8 +5,9 @@
 // Precedence between sources is NOT verified by this repository's docs or plugin files, so servers are never merged: every
 // definition is listed with its source, and a name defined in more than one source is reported as a duplicate.
 //
-// Env values must be CREDENTIAL REFERENCES, written `${cred:NAME}`; the value is resolved at spawn time from the caller's
-// environment by the injected resolver. A literal value is never passed to a server and is flagged by validate.
+// Env values must be REFERENCES, written `${cred:NAME}` (Asterweave's) or `${NAME}` (the form Claude Code expands from its own
+// environment; UNVERIFIED here); the value is resolved at spawn time from the caller's environment by the injected resolver.
+// A literal value (or a `${NAME:-default}`) is never passed to a server and is flagged by validate.
 //
 // Approvals live in `<userDir>/mcp-approvals.json`: { version: 1, approvals: { <repoKey>: { <source>/<server>: {definitionHash,
 // descriptorHash, tools, approvedAt} } } } (atomic writes, keyed by repository key and server name).
@@ -18,9 +19,9 @@ import { resolveUserDir } from "../../paths.mjs";
 import { resolveBinary } from "../../proc.mjs";
 import { redactText, sanitizeForTerminal } from "../../redact.mjs";
 import { parseJsonText, readJson, writeJsonAtomic } from "../../store.mjs";
-import { credentialRef, descriptorHash } from "./descriptor.mjs";
+import { credentialRef, descriptorHash, envReference } from "./descriptor.mjs";
 
-export { credentialRef };
+export { credentialRef, envReference };
 
 export const SERVER_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 export const SOURCES = Object.freeze(["project", "user", "plugin"]);
@@ -193,7 +194,7 @@ export function lintServer(server, { env = process.env, platform = process.platf
   if (redactText(argText).count > 0) add("error", "MCP_SECRET_IN_ARGS", "arguments contain what looks like a secret; use an env credential reference");
   if (server.url && (redactText(server.url).count > 0 || /\/\/[^/@\s]+@/.test(server.url) || /[?&](?:token|key|api[_-]?key|secret|password|access_token)=/i.test(server.url))) add("error", "MCP_SECRET_IN_URL", "the url contains credentials");
   for (const [key, value] of Object.entries(server.env)) {
-    if (credentialRef(value) === null) add("error", "MCP_ENV_LITERAL", `env ${safe(key, 60)} is not a credential reference (use \${cred:NAME}); literal values are never passed to the server`);
+    if (credentialRef(value) === null) add("error", "MCP_ENV_LITERAL", `env ${safe(key, 60)} is not an environment reference (use \${NAME} or \${cred:NAME}); literal values are never passed to the server`);
   }
   if ((server.transport === "http" || server.transport === "sse") && server.url && URL.canParse(server.url) && new URL(server.url).protocol !== "https:") add("warn", "MCP_NO_TLS", "the remote server is not reached over https");
   if (server.transport === "stdio" && server.command) {
@@ -238,6 +239,26 @@ export function saveApproval(repoKey, source, name, record, options = {}) {
   approvals[repoKey] = Object.assign(Object.create(null), isObject(approvals[repoKey]) ? approvals[repoKey] : {});
   approvals[repoKey][approvalKey(source, name)] = { definitionHash: record.definitionHash, descriptorHash: record.descriptorHash, tools: record.tools, approvedAt: record.approvedAt };
   writeJsonAtomic(approvalsFile(options), { version: 1, approvals }, { fs: options.fs });
+}
+
+/**
+ * Delete the stored approval(s) of one server so an identical re-add cannot revive them. A project server's approval lives under its
+ * repository key; a USER server is shared by every repository, so its record is removed under every repository key.
+ * @returns {number} how many records were removed
+ */
+export function removeApprovals(repoKey, source, name, options = {}) {
+  const store = readStore(options);
+  const key = approvalKey(source, name);
+  const approvals = Object.assign(Object.create(null), store.approvals);
+  let removed = 0;
+  for (const repo of source === "project" ? [repoKey] : Object.keys(approvals)) {
+    if (!isObject(approvals[repo]) || !Object.hasOwn(approvals[repo], key)) continue;
+    approvals[repo] = Object.assign(Object.create(null), approvals[repo]);
+    delete approvals[repo][key];
+    removed += 1;
+  }
+  if (removed > 0) writeJsonAtomic(approvalsFile(options), { version: 1, approvals }, { fs: options.fs });
+  return removed;
 }
 
 /** valid / stale / none, judged on the definition hash only (the tool list needs a spawn; `mcp test` re-checks it). */

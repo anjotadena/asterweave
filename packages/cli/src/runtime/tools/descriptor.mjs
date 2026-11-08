@@ -15,10 +15,25 @@ import { stringifyJson } from "../../json.mjs";
 export const DESCRIPTOR_VERSION = 2;
 const CRED_REF = /^\$\{cred:([A-Za-z_][A-Za-z0-9_]{0,63})\}$/;
 
-/** The credential name in `${cred:NAME}`, or null for anything else. */
+// upper case only, exactly what `mcp add` accepts (one rule for add, validate and the descriptor)
+const VAR_REF = /^\$\{([A-Z_][A-Z0-9_]{0,63})\}$/;
+
+/**
+ * An env value that is a REFERENCE, never a literal: `${cred:NAME}` (Asterweave's) or `${NAME}` (Claude Code expands it from its
+ * environment; UNVERIFIED here). A default (`${NAME:-x}`) is not a reference: it could carry a literal.
+ * @returns {{kind: "cred"|"var", name: string} | null}
+ */
+export function envReference(value) {
+  if (typeof value !== "string") return null;
+  const cred = CRED_REF.exec(value);
+  if (cred) return { kind: "cred", name: cred[1] };
+  const variable = VAR_REF.exec(value);
+  return variable ? { kind: "var", name: variable[1] } : null;
+}
+
+/** The variable name a reference (either form) points at, or null for anything else. */
 export function credentialRef(value) {
-  const match = typeof value === "string" ? CRED_REF.exec(value) : null;
-  return match ? match[1] : null;
+  return envReference(value)?.name ?? null;
 }
 const MAX_DEPTH = 24;
 const MAX_NODES = 20_000;
@@ -78,6 +93,11 @@ function urlForHash(value) {
   }
 }
 
+function refMarker(value) {
+  const ref = envReference(value);
+  return ref === null ? "[literal]" : ref.kind === "cred" ? ref.name : `env:${ref.name}`;
+}
+
 /**
  * The canonical descriptor of a server definition plus (optionally) its advertised tool list.
  * @param {{transport?: string, command?: string, args?: string[], cwd?: string, env?: Record<string, unknown>, url?: string}} definition
@@ -92,7 +112,8 @@ export function descriptorOf(definition, tools = null) {
     args: Array.isArray(def.args) ? def.args.map((arg) => String(arg)) : [],
     cwd: typeof def.cwd === "string" ? def.cwd : null,
     // reference NAMES only; a literal value is hashed as a marker (it is never passed to a server anyway)
-    envRefs: def.env && typeof def.env === "object" ? Object.fromEntries(Object.keys(def.env).sort().map((key) => [key, credentialRef(def.env[key]) ?? "[literal]"])) : {},
+    // `${cred:NAME}` hashes as NAME (unchanged since descriptor v2, so existing approvals stay valid); `${NAME}` as env:NAME
+    envRefs: def.env && typeof def.env === "object" ? Object.fromEntries(Object.keys(def.env).sort().map((key) => [key, refMarker(def.env[key])])) : {},
     url: urlForHash(def.url),
     tools: tools === null ? null : tools.map((tool) => ({ name: String(tool.name), description: sha256(String(tool.description ?? "")), schema: schemaHash(tool.inputSchema) })).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)),
   };

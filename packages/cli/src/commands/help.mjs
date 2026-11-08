@@ -4,6 +4,7 @@
 import { EXIT, UsageError } from "../exit-codes.mjs";
 import { contextHelpText } from "./context.mjs";
 import { mcpHelpText } from "./mcp.mjs";
+import { pluginHelpText } from "./plugin.mjs";
 import { pipelineHelpText } from "./pipeline.mjs";
 import { sessionHelpText } from "./session.mjs";
 
@@ -185,6 +186,7 @@ export const COMMAND_HELP = Object.freeze({
   ]),
   mcp: block(mcpHelpText.split("\n")),
   session: block(sessionHelpText.trimEnd().split("\n")),
+  plugin: block(pluginHelpText.trimEnd().split("\n")),
   context: block(contextHelpText.trimEnd().split("\n")),
   pipeline: block(pipelineHelpText.trimEnd().split("\n")),
   trust: block([
