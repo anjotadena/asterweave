@@ -116,6 +116,9 @@ const addKnown = (sum, value) => (Number.isInteger(value) && value >= 0 ? (sum ?
  * @param {object} [options.claude]  Seams for runClaudeTurn: claudePath, claudeArgs, claudeVersion, spawn, env, platform, exists, killTree.
  * @param {Function} [options.runTurn]  Replaces runClaudeTurn (tests).
  * @param {(id: string) => void} [options.onProviderSession]
+ * @param {{items: {id: string, sha256: string, bytes: number}[], load: () => {mime: string, dataBase64: string}[]}} [options.attachments]  Images for the FIRST
+ *   successful turn of the run only (later turns resume the provider session, which already holds them). `load` reads and verifies the stored copies.
+ * @param {(ids: string[]) => void} [options.onAttachmentsSent]  Called once, after the first successful turn that carried the images.
  */
 export function createClaudeExecutor(options) {
   const { graph, cwd, runId, runDir, configDir, routing = null, sessionId, claude = {}, runTurn = runClaudeTurn, onProviderSession } = options;
@@ -131,6 +134,7 @@ export function createClaudeExecutor(options) {
   let events = [];
   let pendingUsage = null;
   let inflight = Promise.resolve();
+  let imagesPending = Array.isArray(options.attachments?.items) && options.attachments.items.length > 0;
 
   const routeFor = (node) => {
     if (!routes.has(node)) routes.set(node, resolveRoute({ config: routing ?? { default: null, effort: null, fallback: [], stages: {} }, node }));
@@ -180,7 +184,16 @@ export function createClaudeExecutor(options) {
         providerSessionId = null;
         providerRouteModel = undefined;
       }
-      const resumeNow = providerSessionId !== null;
+      // While images are pending the turn ALWAYS starts a fresh provider session: images are never sent twice into one provider session.
+      const resumeNow = providerSessionId !== null && !imagesPending;
+      let images = null;
+      if (imagesPending) {
+        try {
+          images = options.attachments.load();
+        } catch (error) {
+          throw new RunnerFailure({ class: "invalid-request", message: `the attached images could not be read: ${clean(error.message, 200)}`, remediation: "Check the session's attachments (asterweave session show), or detach the image and attach it again.", retryable: false });
+        }
+      }
       const turnOptions = {
         prompt, cwd, deadlineMs, maxOutputBytes, signal: ctx.signal,
         ...(route.model ? { model: route.model } : {}), ...(route.effort ? { effort: route.effort } : {}),
@@ -188,11 +201,26 @@ export function createClaudeExecutor(options) {
         extraEnv: { ASTERWEAVE_RUN_ID: runId, ...(sessionId ? { ASTERWEAVE_SESSION_ID: sessionId } : {}), ASTERWEAVE_CONFIG_DIR: configDir },
         ...claude, ...(claudeVersion === undefined ? {} : { claudeVersion }),
         ...(resumeNow ? { resume: providerSessionId } : { sessionId: randomUUID() }),
+        ...(images ? { images } : {}),
       };
       const turn = runTurn(turnOptions);
       const result = await turn;
       collect(result, node, wanted);
-      if (result.ok) return result;
+      if (images) {
+        const items = options.attachments.items;
+        events.push({ type: "attachments.sent", node, count: items.length, bytes: items.reduce((sum, item) => sum + item.bytes, 0), turnOk: result.ok === true, sha256: items.map((item) => item.sha256.slice(0, 12)).join(",") });
+      }
+      if (images && !result.ok) {
+        providerSessionId = null; // the failed turn may have put the images into its provider session: never resume it
+        providerRouteModel = undefined;
+      }
+      if (result.ok) {
+        if (images) {
+          imagesPending = false;
+          try { options.onAttachmentsSent?.(options.attachments.items.map((item) => item.id)); } catch { /* the session record is best effort */ }
+        }
+        return result;
+      }
       if (ctx.signal?.aborted) {
         // Interrupted (user) or past the step deadline: the turn's records are already collected above; stop here, no fallback.
         if (ctx.signal.reason?.name === "TimeoutError") throw new RunnerFailure({ class: "timeout", message: "the step deadline was exceeded", remediation: "Raise the deadline or retry.", retryable: false });

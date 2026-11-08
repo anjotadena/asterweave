@@ -53,7 +53,7 @@ test("the frame shows header, banner, welcome, hint strip, footer and a persiste
   assert.equal(lines[0], "Asterweave v1.2.3 | acme/widgets (main)   /help · Esc to close");
   assert.ok(lines.includes("✓ Runner: Local"));
   assert.ok(lines.includes("Welcome to widgets. How can I help today?"));
-  assert.ok(lines.includes("/commands show commands   @context add context (e.g. @repo)"));
+  assert.ok(lines.includes("/commands show commands   /context usage   @context add context (e.g. @repo)"));
   assert.ok(lines.includes("/ @ select  Enter confirm  Esc close"));
   assert.equal(lines.at(-1), "> ▏");
   assert.equal(lines.length, 30, "fills the terminal rows exactly");
@@ -180,7 +180,7 @@ test("free text and stub commands print the not-available line; unknown slash co
   const h = harness();
   await h.ready;
   const tokenLike = FAKE_GH_TOKEN;
-  for (const line of ["hello", "/sessions", "/usage", "/settings", "/context", tokenLike]) {
+  for (const line of ["hello", "/sessions", "/settings", tokenLike]) {
     await h.send(`${line}\r`, [...line].length + 1);
     const screen = h.last();
     assert.ok(screen.slice(screen.lastIndexOf(`> ${line}`)).includes(NOT_AVAILABLE), line);
@@ -188,7 +188,7 @@ test("free text and stub commands print the not-available line; unknown slash co
   await h.send("/nope\r", 6);
   assert.ok(h.last().includes("Unknown command /nope. Type /help for the command list."));
   assert.equal(h.term.errText(), "", "nothing logged to stderr");
-  assert.equal(h.session().transcript.filter((line) => line === NOT_AVAILABLE).length, 6);
+  assert.equal(h.session().transcript.filter((line) => line === NOT_AVAILABLE).length, 4);
   h.term.stdin.write("\x03");
   await h.running;
 });

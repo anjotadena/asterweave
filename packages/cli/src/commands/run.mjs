@@ -60,10 +60,10 @@ export const runCommandMeta = Object.freeze({
   summary: "Start, resume, show, approve or abort a run",
   boolean: ["json", "yes"],
   // The union over every subcommand (including the hidden ones); each subcommand narrows it below.
-  options: ["json", "yes", "approval", "subject", "nonce", "executor", "script", "graph", "goal", "run-id", "workflow", "session", "runner", "worktree"],
+  options: ["json", "yes", "approval", "subject", "nonce", "executor", "script", "graph", "goal", "run-id", "workflow", "session", "runner", "worktree", "image"],
 });
 
-const PUBLIC_USAGE = "Usage: asterweave run start <goal> [--workflow delivery|bugfix] [--session <id>] [--worktree <name>] | run resume <runId> | run show [runId] [--json] | run approve <runId> [--approval <id> --subject <hash> --nonce <code>] | run abort <runId> [--yes]";
+const PUBLIC_USAGE = "Usage: asterweave run start <goal> [--workflow delivery|bugfix] [--session <id>] [--worktree <name>] [--image <path>]... | run resume <runId> | run show [runId] [--json] | run approve <runId> [--approval <id> --subject <hash> --nonce <code>] | run abort <runId> [--yes]";
 const SUBJECT_SHOWN = 12;
 const GOAL_LINE = 400;
 const HIDDEN_SUBJECT = "hidden inside a run";
@@ -74,7 +74,7 @@ const FLAGS = {
   show: ["json"],
   approve: ["json", "approval", "subject", "nonce"],
   abort: ["json", "yes"],
-  start: ["json", "executor", "script", "graph", "goal", "run-id", "workflow", "session", "runner", "worktree"],
+  start: ["json", "executor", "script", "graph", "goal", "run-id", "workflow", "session", "runner", "worktree", "image"],
   resume: ["json", "executor", "script", "runner"],
 };
 // start and resume are public with the Claude runner; only the scripted fake executor behind them is development only (wantsFake).
@@ -662,7 +662,7 @@ function nonceAnnouncer(ctx) {
   };
 }
 
-async function drive(ctx, { loop, loopOptions, dir, graph, executor, policy, hooks, repo, branch, run, finish }) {
+async function drive(ctx, { loop, loopOptions, dir, graph, executor, policy, hooks, repo, branch, run, finish, imageInfo }) {
   const interrupt = interruptSignal(ctx);
   try {
     const result = await loop({
@@ -686,7 +686,8 @@ async function drive(ctx, { loop, loopOptions, dir, graph, executor, policy, hoo
     // An interrupted claude turn is fully gone (process tree killed) before the command returns; an executor that never settles cannot hang it.
     await Promise.race([executor.idle?.(), new Promise((resolve) => { setTimeout(resolve, 10_000).unref?.(); })]);
     try { finish?.(result); } catch { /* a convenience record must not change the outcome */ }
-    const summary = summarize(result, run ?? result.run, insideRun(ctx));
+    // Images sent with the first turn: hashes and sizes only (never bytes). Present only when the run was started with images.
+    const summary = { ...summarize(result, run ?? result.run, insideRun(ctx)), ...(imageInfo ? { attachments: imageInfo.views, ...(imageInfo.warnings.length > 0 ? { imageWarnings: imageInfo.warnings } : {}) } : {}) };
     report(ctx, summary);
     return result.exitCode;
   } finally {
@@ -754,11 +755,11 @@ async function resumeRun(ctx, rest, deps) {
 // ---------------------------------------------------------------------------------------------
 
 /**
- * Handler factory. `runLoopImpl`, `loopOptions`, `claude` (claudePath, claudeArgs, spawn, exists), `runTurn` and `runnerOptions` are test seams.
+ * Handler factory. `runLoopImpl`, `loopOptions`, `claude` (claudePath, claudeArgs, spawn, exists), `runTurn`, `runnerOptions`, `catalog` (model catalog for the image check) and `imageStore` ({listAttachments}) are test seams.
  * @param {{runLoopImpl?: typeof runLoop, loopOptions?: object}} [seamsIn]
  */
-export function createRunCommand({ runLoopImpl = runLoop, loopOptions = {}, claude, runTurn, runnerOptions } = {}) {
-  const runner = { ...(claude ? { claude } : {}), ...(runTurn ? { runTurn } : {}), ...(runnerOptions ? { runnerOptions } : {}) };
+export function createRunCommand({ runLoopImpl = runLoop, loopOptions = {}, claude, runTurn, runnerOptions, catalog, imageStore } = {}) {
+  const runner = { ...(claude ? { claude } : {}), ...(runTurn ? { runTurn } : {}), ...(runnerOptions ? { runnerOptions } : {}), ...(catalog ? { catalog } : {}), ...(imageStore ? { imageStore } : {}) };
   return async function run(ctx) {
     const [sub, ...rest] = ctx.positionals ?? [];
     if (sub === undefined) throw new UsageError("Missing run subcommand.", { remediation: PUBLIC_USAGE });

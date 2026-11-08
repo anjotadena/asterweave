@@ -19,6 +19,7 @@ import { killProcessTree } from "../tools/mcp-client.mjs";
 import { buildClaudeArgv, ClaudeArgError, isAbsolutePath, MIN_CLAUDE_VERSION, parseVersion, versionAtLeast } from "./argv.mjs";
 import { classifyFailure, describeFailure, isRetryable } from "./classify.mjs";
 import { buildClaudeEnv } from "./env.mjs";
+import { buildStreamJsonInput } from "./images.mjs";
 import { createStreamParser } from "./stream.mjs";
 
 export const RUN_LIMITS = Object.freeze({
@@ -117,6 +118,7 @@ export async function checkClaude(opts = {}) {
  * @property {string} [claudePath]  Absolute path of the executable (default: `claude` resolved on PATH).
  * @property {string[]} [claudeArgs]  Arguments placed BEFORE the generated ones (test seam: `[fakeClaudeScript]` with claudePath = node).
  * @property {string} [claudeVersion]  A version string already verified by the caller: skips the `--version` probe.
+ * @property {{mime: string, dataBase64: string}[]} [images]  Sent with this turn (stream-json input, see images.mjs); never in argv.
  * Other options: sessionId, resume, fork, model, effort, permissionMode, allowedTools, appendSystemPrompt, settingsPath,
  * mcpConfigPath, strictMcp (see argv.mjs); extraEnv (env.mjs); spawn, env, platform, now, exists, killTree, onEvent;
  * killGraceMs, exitGraceMs, streamLimits, maxMalformedLines (tuning/test seams).
@@ -141,8 +143,11 @@ export async function runClaudeTurn(opts = {}) {
 
   let argv;
   let env;
+  let stdinBytes;
   try {
     argv = buildClaudeArgv(opts, { platform });
+    // With images the ONE stdin line is a stream-json user message (images.mjs, UNVERIFIED shape); otherwise the prompt text itself.
+    stdinBytes = Array.isArray(opts.images) && opts.images.length > 0 ? buildStreamJsonInput({ prompt: opts.prompt, images: opts.images }) : Buffer.from(opts.prompt, "utf8");
     env = buildClaudeEnv(hostEnv, { extraEnv: opts.extraEnv ?? {}, platform });
   } catch (error) {
     if (error instanceof ClaudeArgError || error instanceof TypeError) return failure("invalid-request", error.message);
@@ -236,7 +241,7 @@ export async function runClaudeTurn(opts = {}) {
     });
 
     try {
-      child.stdin.end(Buffer.from(opts.prompt, "utf8"));
+      child.stdin.end(stdinBytes);
     } catch {
       /* the error handler above sees EPIPE; the deadline still bounds the turn */
     }

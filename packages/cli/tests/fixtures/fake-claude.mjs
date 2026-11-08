@@ -8,6 +8,9 @@
 //   sessionId, model, tools, toolUses [{id,name,input}], text, usage, costUsd, resultText, exitCode, stderr
 //   record       file to write {argv, stdinBytes, stdinSha256, envKeys, env, cwd} to (secrets must be checked by key name)
 //   pidFile      file to write the grandchild pid to (mode grandchild)
+//   rejectImages true: a turn whose stream-json input carries image blocks fails with an error result
+// With `--input-format stream-json` stdin is ONE user message line; the record file then also holds {inputFormat, blockTypes, images: [{mediaType,
+// decodedBytes, decodedSha256, base64Length}]} (never the data itself). Used to prove what the child received.
 // The stream shapes are the spec's UNVERIFIED guess, not a recording of a real claude.
 
 import { spawn } from "node:child_process";
@@ -27,8 +30,24 @@ const init = () => out({ type: "system", subtype: "init", session_id: sessionId,
 const resultEvent = (extra = {}) => out({ type: "result", subtype: "success", is_error: false, result: scenario.resultText ?? "done", session_id: sessionId, total_cost_usd: scenario.costUsd ?? 0.0123, usage: scenario.usage ?? { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 3, cache_creation_input_tokens: 4 }, ...extra });
 const hang = () => setInterval(() => {}, 1 << 30);
 
-function emitBody(stdin = Buffer.alloc(0)) {
-  if (scenario.protocol && scenario.resultText === undefined) scenario = { ...scenario, resultText: protocolText(stdin.toString("utf8")) };
+// The UNVERIFIED stream-json input shape (see src/runtime/claude/images.mjs): {type:"user",message:{content:[{type:"image",source:{media_type,data}},{type:"text",text}]}}.
+function parseStreamJsonInput(stdin) {
+  if (args[args.indexOf("--input-format") + 1] !== "stream-json" || !args.includes("--input-format")) return null;
+  const message = JSON.parse(stdin.toString("utf8").split(String.fromCharCode(10))[0]).message;
+  const blocks = message.content;
+  const images = blocks.filter((block) => block.type === "image").map((block) => {
+    const decoded = Buffer.from(block.source.data, "base64");
+    return { mediaType: block.source.media_type, decodedBytes: decoded.length, decodedSha256: createHash("sha256").update(decoded).digest("hex"), base64Length: block.source.data.length };
+  });
+  return { blockTypes: blocks.map((block) => block.type), images, text: blocks.filter((block) => block.type === "text").map((block) => block.text).join(String.fromCharCode(10)) };
+}
+
+function emitBody(stdin = Buffer.alloc(0), input = null) {
+  if (input && scenario.rejectImages && input.images.length > 0) {
+    mode = "error-result";
+    scenario = { ...scenario, resultText: "invalid_request: this model does not accept images", exitCode: 1 };
+  }
+  if (scenario.protocol && scenario.resultText === undefined) scenario = { ...scenario, resultText: protocolText(input ? input.text : stdin.toString("utf8")) };
   if (mode === "success" || mode === "no-stdin-read") {
     init();
     for (const use of scenario.toolUses ?? []) out({ type: "assistant", message: { content: [{ type: "text", text: scenario.text ?? "working" }, { type: "tool_use", id: use.id, name: use.name, input: use.input }] } });
@@ -86,11 +105,11 @@ function emitBody(stdin = Buffer.alloc(0)) {
   }
 }
 
-function record(stdin) {
-  if (scenario.recordLog) appendFileSync(scenario.recordLog, `${JSON.stringify({ argv: args })}
+function record(stdin, input = null) {
+  if (scenario.recordLog) appendFileSync(scenario.recordLog, `${JSON.stringify({ argv: args, ...(input ? { blockTypes: input.blockTypes, images: input.images } : {}) })}
 `);
   if (!scenario.record) return;
-  writeFileSync(scenario.record, JSON.stringify({ argv: args, stdinBytes: stdin.length, stdinSha256: createHash("sha256").update(stdin).digest("hex"), envKeys: Object.keys(process.env), env: Object.fromEntries(Object.entries(process.env).filter(([key]) => /^(ASTERWEAVE_|CLAUDE|ANTHROPIC_|GITHUB_|GH_|NPM_|AWS_|GOOGLE_)/i.test(key))), cwd: process.cwd() }));
+  writeFileSync(scenario.record, JSON.stringify({ argv: args, stdinBytes: stdin.length, stdinSha256: createHash("sha256").update(stdin).digest("hex"), envKeys: Object.keys(process.env), env: Object.fromEntries(Object.entries(process.env).filter(([key]) => /^(ASTERWEAVE_|CLAUDE|ANTHROPIC_|GITHUB_|GH_|NPM_|AWS_|GOOGLE_)/i.test(key))), cwd: process.cwd(), ...(input ? { inputFormat: "stream-json", blockTypes: input.blockTypes, images: input.images } : {}) }));
 }
 
 // scenario.sequence: per-run overrides, picked by a counter file next to the scenario (so a retry sees the next entry).
@@ -126,8 +145,9 @@ if (mode === "no-stdin-read" || mode === "hang" || mode === "ignore-sigterm" || 
   process.stdin.on("data", (chunk) => chunks.push(chunk));
   process.stdin.on("end", () => {
     const stdin = Buffer.concat(chunks);
-    record(stdin);
-    emitBody(stdin);
+    const input = parseStreamJsonInput(stdin);
+    record(stdin, input);
+    emitBody(stdin, input);
   });
 }
 }

@@ -420,6 +420,8 @@ const EXECUTOR_EVENTS = {
   "tool.observed": { id: "s", name: "s", inputSummary: "s", at: "s" },
   "route.fallback": { from: "s", to: "s", class: "s" },
   "provider.session": { providerSessionId: "s", routeModel: "s" },
+  // images sent with a turn: counts, sizes and hash PREFIXES only (comma separated), never bytes
+  "attachments.sent": { count: "n", bytes: "n", turnOk: "b", sha256: "s" },
   "runner.turn": { ok: "b", class: "s", exitCode: "n", killed: "b", durationMs: "n", costUsd: "n", model: "s", malformedLines: "n", toolEventsDropped: "n" },
 };
 
@@ -1077,7 +1079,7 @@ class Session {
 
   /**
    * What a RUNNER (an executor that runs tools itself, claude) observed, as ledger records: `tool.observed` (counted against the
-   * toolCalls budgets), `route.fallback`, `provider.session`, `runner.turn`. The executor is untrusted: only these types are
+   * toolCalls budgets), `route.fallback`, `provider.session`, `runner.turn`, `attachments.sent`. The executor is untrusted: only these types are
    * taken, only their known fields, strings capped and redacted.
    */
   recordExecutorEvents(ctx) {

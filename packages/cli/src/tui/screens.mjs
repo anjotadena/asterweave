@@ -7,7 +7,7 @@ export const NOT_AVAILABLE = "Not available in this build (agent sessions arrive
 export const SIGN_IN_TITLE = "Sign in to continue.";
 export const SIGN_IN_PROMPT = "? Choose a provider:";
 export const SIGN_IN_NOTE = "A browser will open to authorize Asterweave. After approval, return here to continue.";
-export const HINT_LINE = "/commands show commands   @context add context (e.g. @repo)";
+export const HINT_LINE = "/commands show commands   /context usage   @context add context (e.g. @repo)";
 
 /** Sign-in choices. GitHub is first because it is required to launch. */
 export const SIGN_IN_PROVIDERS = Object.freeze([
@@ -20,9 +20,11 @@ export const SLASH_COMMANDS = Object.freeze([
   Object.freeze({ name: "/help", hint: "show the command list" }),
   Object.freeze({ name: "/commands", hint: "show the command list" }),
   Object.freeze({ name: "/sessions", hint: "browse sessions" }),
-  Object.freeze({ name: "/usage", hint: "show usage" }),
+  Object.freeze({ name: "/usage", hint: "token usage of the latest run" }),
   Object.freeze({ name: "/settings", hint: "open settings" }),
-  Object.freeze({ name: "/context", hint: "add context (@)" }),
+  Object.freeze({ name: "/context", hint: "context size, usage and budgets" }),
+  Object.freeze({ name: "/attachments", hint: "list staged images (hashes, sizes)" }),
+  Object.freeze({ name: "/image", hint: "stage an image: /image <path>" }),
   Object.freeze({ name: "/exit", hint: "leave Asterweave" }),
 ]);
 
@@ -143,7 +145,7 @@ export function renderSessionScreen({ version, repo, branch, banner = [], welcom
   });
 }
 
-const OVERLAY_ROWS = 8;
+const OVERLAY_ROWS = 10;
 
 /** Completion list (at most OVERLAY_ROWS items, scrolled around the selection). */
 function overlayBlock({ title, items, index }, width, style) {

@@ -18,6 +18,8 @@ import { createSession, pickOne, withTerminal } from "../tui/session.mjs";
 import { createTerminal } from "../tui/terminal.mjs";
 import { launchCommandMeta } from "./index.mjs";
 import { pickRepository } from "./repo.mjs";
+import { createSessionViews } from "./context.mjs";
+import { resolveRepo } from "./run.mjs";
 import { assertGithubComOnly, colorMode, runtimeSeams } from "./shared.mjs";
 
 export { launchCommandMeta };
@@ -155,7 +157,9 @@ export async function launchCommand(ctx) {
   // --- Session -----------------------------------------------------------------------------------
   let active;
   return withTerminal({ terminal, stdin: ctx.stdin, proc, onInterrupt: () => active?.interrupt() }, ({ input }) => {
-    active = createSession({ terminal, input, style, version: ctx.version, repo: repo.repository, branch: repo.branch, banner });
+    // Read-only /context /usage /attachments /image views; the repository key is resolved on first use (a git query).
+    const views = createSessionViews(ctx, { resolveKey: async () => (await resolveRepo(ctx)).key });
+    active = createSession({ terminal, input, style, version: ctx.version, repo: repo.repository, branch: repo.branch, banner, views });
     return active.run();
   });
 }

@@ -55,6 +55,8 @@ export function buildClaudeArgv(options = {}, { platform = process.platform } = 
   const argv = ["-p", "--output-format", "stream-json", "--verbose"];
   const { sessionId, resume, fork = false, model, effort, permissionMode = "default", allowedTools, appendSystemPrompt, settingsPath, mcpConfigPath, strictMcp = false } = options;
 
+  // Images travel as ONE stream-json user message on stdin (images.mjs, UNVERIFIED shape); without images the prompt is plain text.
+  if (Array.isArray(options.images) && options.images.length > 0) argv.push("--input-format", "stream-json");
   if (fork && !resume) throw new ClaudeArgError("fork needs a session to resume");
   if (sessionId !== undefined && sessionId !== null) {
     if (typeof sessionId !== "string" || !UUID_PATTERN.test(sessionId)) throw new ClaudeArgError("sessionId must be a UUID");

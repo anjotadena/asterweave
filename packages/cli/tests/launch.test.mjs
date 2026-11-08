@@ -110,7 +110,7 @@ test("signed in with a connection: no sign-in, no repo pickers, banner then sess
     "Asterweave account: unavailable (local session)",
     "Claude Code · local",
     "Welcome to widgets. How can I help today?",
-    "/commands show commands   @context add context (e.g. @repo)",
+    "/commands show commands   /context usage   @context add context (e.g. @repo)",
     "/ @ select  Enter confirm  Esc close",
   ]) assert.ok(screen.includes(line), `banner/session screen includes: ${line}\n${screen}`);
   assert.match(screen, /^Asterweave v9\.9\.9 \| acme\/widgets \(main\) {3}\/help · Esc to close$/m);
@@ -413,14 +413,14 @@ test("an untrusted repository without executable config shows no notice", async 
 
 // --- session behaviour through launch ------------------------------------------------------------------------------
 
-test("free text and /sessions /usage /settings print the not-available line and spawn nothing", async () => {
+test("free text and /sessions /settings print the not-available line and spawn nothing", async () => {
   const { env, clone } = setup({ connected: true });
   const world = makeWorld();
   const started = await toSession(world, { env, cwd: clone });
   const { term } = started;
   const spawned = world.log.length;
 
-  for (const line of ["hello world", "/sessions", "/usage", "/settings", "/context"]) {
+  for (const line of ["hello world", "/sessions", "/settings"]) {
     const before = frames(term);
     term.stdin.write(`${line}\r`);
     await waitFor(() => frames(term) >= before + line.length + 1 && lastFrame(term).includes(`> ${line}`), { label: line });
@@ -429,6 +429,25 @@ test("free text and /sessions /usage /settings print the not-available line and 
     assert.ok(screen.slice(index).includes(NOT_AVAILABLE), `${line} -> not available`);
   }
   assert.equal(world.log.length, spawned, "no process was spawned after the session started");
+  assert.equal(world.log.some((entry) => entry.name === "claude" && entry.args.includes("-p")), false);
+  await exitSession(started);
+});
+
+test("/context and /usage through launch are read-only views: no run yet, unknown, only a git query, no model call", async () => {
+  const { env, clone } = setup({ connected: true });
+  const world = makeWorld();
+  const started = await toSession(world, { env, cwd: clone });
+  const { term } = started;
+  const spawned = world.log.length;
+  for (const [line, expected] of [["/context", "Context and usage: no run yet"], ["/usage", "Nothing has been measured yet."]]) {
+    const before = frames(term);
+    term.stdin.write(`${line}\r`);
+    await waitFor(() => lastFrame(term).includes(expected), { label: line });
+    assert.ok(frames(term) > before);
+    assert.equal(lastFrame(term).includes(NOT_AVAILABLE), false, `${line} is a real view`);
+  }
+  assert.ok(lastFrame(term).includes("Nothing has been measured yet."));
+  assert.equal(world.log.slice(spawned).every((entry) => entry.name === "git"), true, "only the read-only git query that finds the repository");
   assert.equal(world.log.some((entry) => entry.name === "claude" && entry.args.includes("-p")), false);
   assert.equal(term.errText(), "");
   await exitSession(started);

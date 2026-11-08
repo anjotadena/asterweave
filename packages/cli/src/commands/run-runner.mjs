@@ -8,7 +8,7 @@
 
 import * as nodeFs from "node:fs";
 import { CliError, EXIT, UsageError } from "../exit-codes.mjs";
-import { sanitizeForTerminal } from "../redact.mjs";
+import { sanitizeForTerminal, sanitizeLines } from "../redact.mjs";
 import { resolveUserDir } from "../paths.mjs";
 import { resolveModelConfig } from "../config.mjs";
 import { checkClaude } from "../runtime/claude/run.mjs";
@@ -21,14 +21,17 @@ import { isValidRunId, loadRun, runDir } from "../runtime/ledger.mjs";
 import { createRunForGraph } from "../runtime/loop.mjs";
 import { loadPolicy } from "../runtime/policy.mjs";
 import { configOfPinned, pinRouting, routingFromEntries } from "../runtime/routing.mjs";
+import { claimAttachments, listAttachments, markAttachmentsSent, pendingAttachmentsOf, sessionClaiming } from "../runtime/attachments.mjs";
+import { IMAGE_LIMITS } from "../runtime/image-format.mjs";
 import { addCheckpoint, createSession, linkRun, listSessions, loadSession, setProviderSession } from "../runtime/sessions.mjs";
 import { assertTrusted } from "../trust.mjs";
+import { attachInspected, attachmentViews, checkImageModel, imageModelError, imagePaths, imageSource, inspectAll, sendLines, storeOpts, storeProblemError } from "./images.mjs";
 import { seams, stringOption } from "./shared.mjs";
 
 const WORKFLOWS = ["delivery", "bugfix"];
 /** One claude turn may take minutes: the loop's per-step deadline is raised well above its 2 minute default. */
 export const RUNNER_STEP_MS = 40 * 60_000;
-export const START_USAGE = "Usage: asterweave run start <goal> [--workflow delivery|bugfix] [--session <id>] [--runner claude|fake] [--worktree <name>] [--json]";
+export const START_USAGE = "Usage: asterweave run start <goal> [--workflow delivery|bugfix] [--session <id>] [--runner claude|fake] [--worktree <name>] [--image <path>]... [--json]";
 export const RESUME_USAGE = "Usage: asterweave run resume <runId> [--json]";
 
 const safe = (text, limit = 200) => sanitizeForTerminal(String(text ?? "")).slice(0, limit);
@@ -75,11 +78,12 @@ function claudeSeams(deps, checked) {
   return { ...deps.claude, claudePath: checked.command, claudeArgs: checked.prefix, claudeVersion: checked.version.join(".") };
 }
 
-function makeExecutor(ctx, deps, { graph, run, dir, workspace, checked, sessionId, repoKey, providerSessionId, providerSessionModel }) {
+function makeExecutor(ctx, deps, { graph, run, dir, workspace, checked, sessionId, repoKey, providerSessionId, providerSessionModel, attachments, imageSessionId }) {
   const options = storeOptions(ctx);
   return createClaudeExecutor({
     graph, cwd: workspace, runId: run.runId, runDir: dir, configDir: resolveUserDir(seams(ctx)), routing: configOfPinned(run.routing),
     providerSessionId: providerSessionId ?? null, ...(typeof providerSessionModel === "string" ? { providerSessionModel } : {}), ...(sessionId ? { sessionId } : {}), claude: { ...claudeSeams(deps, checked), env: ctx.env, ...(ctx.platform ? { platform: ctx.platform } : {}) },
+    ...(attachments?.length > 0 ? { attachments: imageSource(imageSessionId ?? sessionId, attachments, ctx, repoKey), onAttachmentsSent: (ids) => { markAttachmentsSent(imageSessionId ?? sessionId, ids, run.runId, storeOpts(ctx, repoKey)); } } : {}),
     ...(deps.runTurn ? { runTurn: deps.runTurn } : {}), ...(deps.runnerOptions ?? {}),
     onProviderSession: sessionId ? (id) => { setProviderSession(repoKey, sessionId, id, options); } : undefined,
   });
@@ -133,12 +137,22 @@ export async function startClaudeRun(ctx, rest, deps, kit) {
   if (sessionOption !== undefined && worktreeName !== undefined) throw new UsageError("Use either --session (an existing session) or --worktree (a new one), not both.", { remediation: START_USAGE });
   const runId = stringOption(ctx, "run-id", START_USAGE) ?? kit.newRunId();
   if (!isValidRunId(runId)) throw new UsageError("--run-id must be 1-64 letters, digits, '-' or '_'.", { remediation: START_USAGE });
+  // Images are explicit (--image, repeatable) and every file is validated here, before a trust check, a session or any child process.
+  const inspectedImages = inspectAll(imagePaths(ctx, START_USAGE), ctx);
 
   const repo = await kit.resolveRepo(ctx);
   requireTrust(ctx, repo.workspace); // exit 4
   const checked = await requireClaude(ctx, deps, repo.workspace); // exit 1
   const policy = loadPolicy(seams(ctx)); // exit 5 before any run directory exists
   const routing = pinRouting(routingFromEntries(resolveModelConfig(seams(ctx)).entries));
+
+  // The routed model of the FIRST node must list image input in the static catalog (unknown or unset model: a warning, images still sent).
+  let imageCheck = null;
+  const checkModel = () => {
+    imageCheck ??= checkImageModel({ routing, node: graph.start, catalog: deps.catalog });
+    if (imageCheck.refused.length > 0) throw imageModelError(imageCheck.refused);
+  };
+  if (inspectedImages.length > 0) checkModel();
 
   let workspace = repo.workspace;
   let sessionId = null;
@@ -149,6 +163,16 @@ export async function startClaudeRun(ctx, rest, deps, kit) {
     if (session.status !== "active") throw new CliError("That session is archived.", { code: "SESSION_ARCHIVED", exitCode: EXIT.ERROR, remediation: "Start a new session, or run without --session." });
     sessionId = session.id;
     providerSessionId = session.providerSessionId;
+    // Early refusals, before anything is created (the list that is finally SENT is re-checked after the images are stored, below).
+    // Images attached earlier and not sent yet (and not claimed by another open run) go with this run's first turn.
+    const staged = pendingAttachmentsOf(session.attachments, repo.key, storeOpts(ctx, repo.key));
+    if (staged.length > 0) checkModel();
+    const known = new Set(session.attachments.map((item) => item.sha256));
+    const added = new Set(inspectedImages.map((item) => item.result.image.sha256));
+    for (const item of staged) added.add(item.sha256);
+    if (added.size > IMAGE_LIMITS.perMessage) throw new UsageError(`This run would send ${added.size} images; at most ${IMAGE_LIMITS.perMessage} fit in one message.`, { code: "TOO_MANY", remediation: "Detach some with: asterweave session detach <id> <attachmentId>" });
+    const fresh = new Set(inspectedImages.map((item) => item.result.image.sha256).filter((sha) => !known.has(sha)));
+    if (session.attachments.length + fresh.size > IMAGE_LIMITS.perSession) throw new UsageError(`The session would hold more than ${IMAGE_LIMITS.perSession} images.`, { code: "TOO_MANY", remediation: "Detach some with: asterweave session detach <id> <attachmentId>" });
     if (session.worktree?.path) {
       await requireSameClone(ctx, kit, repo, (ctx.fs ?? nodeFs).existsSync(session.worktree.path) ? (await kit.resolveRepo({ ...ctx, cwd: session.worktree.path })).workspace : session.worktree.path, "the session");
       workspace = (await kit.resolveRepo({ ...ctx, cwd: session.worktree.path })).workspace;
@@ -165,12 +189,71 @@ export async function startClaudeRun(ctx, rest, deps, kit) {
     }
   }
 
-  const hooks = loadHooks({ ...seams(ctx), repoPath: workspace });
   const branch = await kit.currentBranch(ctx, workspace);
+  const hooks = loadHooks({ ...seams(ctx), repoPath: workspace });
+  // The run is created FIRST: a duplicate --run-id (or any ledger error) leaves no session and no stored image copy behind.
   const created = createRunForGraph({ graph, goal, repo: { key: repo.key, realpath: workspace }, runId, policyHash: policy.policyHash, routing, ...seams(ctx) });
+  let attachments = [];
+  const heldWarnings = [];
+  try {
+    if (inspectedImages.length > 0 && sessionId === null) {
+      // the session store holds the attachment copies, so an image run always has a session
+      try {
+        sessionId = createSession({ repoKey: repo.key, workspace: repo.workspace, branch, title: goal.slice(0, 100), goal: goal.slice(0, 400) }, options).session.id;
+      } catch (error) {
+        throw new CliError(`The session that holds the images could not be recorded: ${safe(error.message)}`, { code: error.code ?? "SESSION_CREATE_FAILED", remediation: "Check that the Asterweave user directory is writable." });
+      }
+    }
+    if (sessionId !== null) {
+      const store = storeOpts(ctx, repo.key);
+      let named = [];
+      if (inspectedImages.length > 0) {
+        const attached = attachInspected(sessionId, inspectedImages, ctx, repo.key); // all or nothing
+        if (attached.problem) throw storeProblemError(attached.problem, "Detach an image first (asterweave session detach), or send fewer images.");
+        named = attached.attachments.map((item) => item.id);
+      }
+      // The list that will ACTUALLY be sent is read once, here; the model check and the per-message cap are applied to it.
+      const all = (deps.imageStore?.listAttachments ?? listAttachments)(sessionId, store);
+      const pending = new Set(pendingAttachmentsOf(all, repo.key, store).map((item) => item.id));
+      attachments = all.filter((item) => pending.has(item.id) || named.includes(item.id));
+      if (attachments.length > IMAGE_LIMITS.perMessage) throw new UsageError(`This run would send ${attachments.length} images; at most ${IMAGE_LIMITS.perMessage} fit in one message.`, { code: "TOO_MANY", remediation: "Detach some with: asterweave session detach <id> <attachmentId>" });
+      if (attachments.length > 0) {
+        checkModel();
+        // Claimed before the first turn (cannot be detached while this run is open); compare-and-set: an image held by ANOTHER open run is skipped unless named.
+        const claimed = claimAttachments(sessionId, attachments.map((item) => item.id), runId, { ...store, explicit: named });
+        if (!claimed.ok) throw storeProblemError(claimed.problems[0]);
+        if (claimed.skipped.length > 0) {
+          const holders = [...new Set(claimed.skipped.map((item) => item.heldBy))].join(", ");
+          heldWarnings.push(`${claimed.skipped.length} staged image(s) are held by open run ${holders} and are not sent with this run`);
+          const got = new Set(claimed.claimed);
+          attachments = attachments.filter((item) => got.has(item.id));
+        }
+      }
+    }
+  } catch (error) {
+    throw withRunHint(error, runId);
+  }
   if (sessionId) checkpoint(repo.key, sessionId, ctx)({ run: created.run, seq: 0, status: "created" });
-  const executor = makeExecutor(ctx, deps, { graph, run: created.run, dir: created.dir, workspace, checked, sessionId, repoKey: repo.key, providerSessionId });
-  return kit.drive(ctx, { ...deps, loopOptions: { stepMs: RUNNER_STEP_MS, ...deps.loopOptions }, dir: created.dir, graph, executor, policy, hooks, repo: { ...repo, workspace }, branch, run: created.run, finish: checkpoint(repo.key, sessionId, ctx) });
+  const imageInfo = announceImages(ctx, attachments, imageCheck, heldWarnings);
+  const executor = makeExecutor(ctx, deps, { graph, run: created.run, dir: created.dir, workspace, checked, sessionId, repoKey: repo.key, providerSessionId, attachments });
+  return kit.drive(ctx, { ...deps, loopOptions: { stepMs: RUNNER_STEP_MS, ...deps.loopOptions }, dir: created.dir, graph, executor, policy, hooks, repo: { ...repo, workspace }, branch, run: created.run, finish: checkpoint(repo.key, sessionId, ctx), imageInfo });
+}
+
+/** The run exists already when an image step fails after it: say how to get rid of it (the error keeps its code and exit code). */
+function withRunHint(error, runId) {
+  if (!(error instanceof CliError)) throw error;
+  return new CliError(error.message, { code: error.code, exitCode: error.exitCode, remediation: `${error.remediation ?? "Fix the problem."} The run ${runId} was created but never started; abort it with: asterweave run abort ${runId} --yes` });
+}
+
+/** Print exactly what will be sent BEFORE the first turn (text mode) and return the summary for the JSON result. */
+function announceImages(ctx, attachments, check, extraWarnings = []) {
+  if (attachments.length === 0 && extraWarnings.length === 0) return undefined;
+  const info = { views: attachmentViews(attachments), warnings: [...(check?.warnings ?? []), ...extraWarnings] };
+  if (ctx.options?.json !== true) {
+    if (attachments.length > 0) ctx.stdout.write(`${sanitizeLines(sendLines(attachments))}\n`);
+    for (const warning of info.warnings) ctx.stderr?.write?.(`Warning: ${safe(warning, 300)}\n`);
+  }
+  return info;
 }
 
 /** @returns {Promise<number>} exit code */
@@ -197,6 +280,25 @@ export async function resumeClaudeRun(ctx, rest, deps, kit) {
   } catch {
     sessionId = null;
   }
-  const executor = makeExecutor(ctx, deps, { graph, run, dir, workspace, checked, sessionId, repoKey: repo.key, providerSessionId: providerEvent?.providerSessionId ?? null, providerSessionModel: providerEvent?.routeModel });
-  return kit.drive(ctx, { ...deps, loopOptions: { stepMs: RUNNER_STEP_MS, ...deps.loopOptions }, dir, graph, executor, policy, hooks, repo: { ...repo, workspace }, branch, run, finish: checkpoint(repo.key, sessionId, ctx) });
+  // Images this run CLAIMED but never got to send (its first turn failed or the run was interrupted) go with the first turn of the resume.
+  // A successful attachments.sent in the ledger means they were delivered: nothing is sent again.
+  let attachments = [];
+  // The session that holds the claimed images may no longer be the one linked to this run (a later run in it re-linked the session).
+  let imageSessionId = null;
+  try {
+    imageSessionId = sessionClaiming(repo.key, runId, storeOptions(ctx));
+  } catch {
+    imageSessionId = null;
+  }
+  if (imageSessionId !== null && !loaded.events.some((event) => event.type === "attachments.sent" && event.turnOk === true)) {
+    attachments = (deps.imageStore?.listAttachments ?? listAttachments)(imageSessionId, storeOpts(ctx, repo.key)).filter((item) => item.sentRunId === null && item.claimedRunId === runId);
+  }
+  let imageCheck = null;
+  if (attachments.length > 0) {
+    imageCheck = checkImageModel({ routing: run.routing, node: run.currentNode, catalog: deps.catalog });
+    if (imageCheck.refused.length > 0) throw imageModelError(imageCheck.refused);
+  }
+  const imageInfo = announceImages(ctx, attachments, imageCheck);
+  const executor = makeExecutor(ctx, deps, { graph, run, dir, workspace, checked, sessionId, repoKey: repo.key, providerSessionId: providerEvent?.providerSessionId ?? null, providerSessionModel: providerEvent?.routeModel, attachments, imageSessionId });
+  return kit.drive(ctx, { ...deps, loopOptions: { stepMs: RUNNER_STEP_MS, ...deps.loopOptions }, dir, graph, executor, policy, hooks, repo: { ...repo, workspace }, branch, run, finish: checkpoint(repo.key, sessionId, ctx), imageInfo });
 }
