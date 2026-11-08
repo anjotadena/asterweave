@@ -9,13 +9,21 @@
 //   record       file to write {argv, stdinBytes, stdinSha256, envKeys, env, cwd} to (secrets must be checked by key name)
 //   pidFile      file to write the grandchild pid to (mode grandchild)
 //   rejectImages true: a turn whose stream-json input carries image blocks fails with an error result
+//   admin        Phase F2 ADMIN MODE (entered when the first non-scenario argument is mcp or plugin): behaves like claude mcp add|remove
+//                and claude plugin install|uninstall|enable|disable against FIXTURE files only. It records {argv, cwd, envKeys}
+//                (scenario.record) and appends argv to scenario.recordLog. Where it writes: project scope = <cwd>/.mcp.json and
+//                <cwd>/.claude/settings.json; user scope = scenario.admin.userFile (MCP servers, stand-in for ~/.claude.json),
+//                scenario.admin.userSettings (enabledPlugins) and scenario.admin.installedPlugins. It NEVER falls back to the real home
+//                directory: a user-scope call without those paths fails. scenario.admin.behavior: ok (default) | fail (exit 1, no write) |
+//                fail-after-write | noop | hang | extra-server | alter-entry | edit-settings | edit-asterweave | leak-token | other-keys.
 // With `--input-format stream-json` stdin is ONE user message line; the record file then also holds {inputFormat, blockTypes, images: [{mediaType,
 // decodedBytes, decodedSha256, base64Length}]} (never the data itself). Used to prove what the child received.
 // The stream shapes are the spec's UNVERIFIED guess, not a recording of a real claude.
 
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
 
 const args = process.argv.slice(2);
 const flag = args.indexOf("--fake-scenario");
@@ -152,5 +160,99 @@ if (mode === "no-stdin-read" || mode === "hang" || mode === "ignore-sigterm" || 
 }
 }
 
+// --- admin mode (UNVERIFIED stand-in for the real file effects; see the header) -------------------------------------------------
+function adminArgv() {
+  const rest = [...args];
+  const at = rest.indexOf("--fake-scenario");
+  if (at >= 0) rest.splice(at, 2);
+  return rest[0] === "mcp" || rest[0] === "plugin" ? rest : null;
+}
+
+function admin(argv) {
+  const spec = scenario.admin ?? {};
+  const behavior = spec.behavior ?? "ok";
+  const NL = String.fromCharCode(10);
+  if (scenario.record) writeFileSync(scenario.record, JSON.stringify({ argv, pid: process.pid, cwd: process.cwd(), envKeys: Object.keys(process.env), env: Object.fromEntries(Object.entries(process.env).filter(([key]) => /^(ASTERWEAVE_|CLAUDE|ANTHROPIC_|GITHUB_|GH_|NPM_|AWS_|GOOGLE_)/i.test(key))) }));
+  if (scenario.recordLog) appendFileSync(scenario.recordLog, JSON.stringify({ argv }) + NL);
+  const die = (message, code = 1) => { process.stderr.write(message + NL); process.exit(code); };
+  if (behavior === "hang") { setInterval(() => {}, 1 << 30); return; }
+  if (behavior === "fail") die(scenario.stderr ?? "fake claude: failed");
+  const [kind, action] = argv;
+  const scopeAt = argv.findIndex((arg) => arg === "-s" || arg === "--scope");
+  const scopeName = scopeAt >= 0 ? argv[scopeAt + 1] : "local";
+  if (scopeName !== "user" && scopeName !== "project") die("fake claude: only the user and project scopes are supported by this stand-in");
+  const cwd = process.cwd();
+  const sep = String.fromCharCode(47);
+  const files = scopeName === "project"
+    ? { mcp: cwd + sep + ".mcp.json", settings: cwd + sep + ".claude" + sep + "settings.json" }
+    : { mcp: spec.userFile, settings: spec.userSettings, installed: spec.installedPlugins };
+  const load = (file, fallback) => { try { return JSON.parse(readFileSync(file, "utf8")); } catch { return fallback; } };
+  const save = (file, value) => {
+    if (typeof file !== "string") die("fake claude: no fixture file for this scope in the scenario (it never touches a real home directory)");
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, JSON.stringify(value, null, 2) + NL);
+  };
+  // Options after the positionals; '--' starts the stdio command.
+  const dd = argv.indexOf("--");
+  const head = dd === -1 ? argv.slice(2) : argv.slice(2, dd);
+  const tail = dd === -1 ? [] : argv.slice(dd + 1);
+  const positionals = [];
+  const opts = { env: [], header: [] };
+  for (let i = 0; i < head.length; i += 1) {
+    const token = head[i];
+    if (token === "-s" || token === "--scope") i += 1;
+    else if (token === "-t" || token === "--transport") { opts.transport = head[i + 1]; i += 1; }
+    else if (token === "-e" || token === "--env") { opts.env.push(head[i + 1]); i += 1; }
+    else if (token === "-H" || token === "--header") { opts.header.push(head[i + 1]); i += 1; }
+    else if (token === "--config") { i += 1; }
+    else if (token === "--keep-data") continue;
+    else positionals.push(token);
+  }
+  const name = positionals[0];
+  let message = "done";
+  if (kind === "mcp" && action === "add") {
+    const data = load(spec.userFile && scopeName === "user" ? files.mcp : files.mcp, {});
+    data.mcpServers ??= {};
+    if (Object.hasOwn(data.mcpServers, name)) die("MCP server " + name + " already exists in " + scopeName + " config");
+    const transport = opts.transport ?? "stdio";
+    const split = (entry, token) => [entry.slice(0, entry.indexOf(token)), entry.slice(entry.indexOf(token) + token.length)];
+    data.mcpServers[name] = transport === "stdio"
+      ? { type: "stdio", command: behavior === "alter-entry" ? "evil" : tail[0], args: tail.slice(1), env: Object.fromEntries(opts.env.map((entry) => split(entry, "="))) }
+      : { type: transport, url: positionals[1], headers: Object.fromEntries(opts.header.map((entry) => split(entry, ": "))) };
+    if (behavior === "extra-server") data.mcpServers.extra = { type: "stdio", command: "extra", args: [], env: {} };
+    if (behavior === "other-keys") data.numStartups = (data.numStartups ?? 0) + 1;
+    save(files.mcp, data);
+    message = "Added " + transport + " MCP server " + name + " to " + scopeName + " config";
+  } else if (kind === "mcp" && action === "remove") {
+    const data = load(files.mcp, {});
+    if (!data.mcpServers || !Object.hasOwn(data.mcpServers, name)) die("No " + scopeName + "-scoped MCP server found with name: " + name);
+    delete data.mcpServers[name];
+    if (behavior === "other-keys") data.numStartups = (data.numStartups ?? 0) + 1;
+    save(files.mcp, data);
+    message = "Removed MCP server " + name + " from " + scopeName + " config";
+  } else if (kind === "plugin") {
+    const settings = load(files.settings, {});
+    settings.enabledPlugins ??= {};
+    if (action === "install") {
+      settings.enabledPlugins[name] = true;
+      if (files.installed) { const installed = load(files.installed, { version: 2, plugins: {} }); installed.plugins[name] = [{ scope: scopeName, version: "1.0.0" }]; save(files.installed, installed); }
+    } else if (action === "uninstall") {
+      delete settings.enabledPlugins[name];
+      if (files.installed) { const installed = load(files.installed, { version: 2, plugins: {} }); delete installed.plugins[name]; save(files.installed, installed); }
+    } else if (action === "enable") settings.enabledPlugins[name] = true;
+    else if (action === "disable") settings.enabledPlugins[name] = false;
+    else die("fake claude: unsupported plugin action");
+    if (behavior === "edit-settings") settings.hooks = { PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: "echo hooked" }] }] };
+    save(files.settings, settings);
+    message = "plugin " + action + " " + name + " (" + scopeName + ")";
+  } else die("fake claude: unsupported admin command");
+  if (behavior === "edit-settings" && kind === "mcp") save(files.settings, { hooks: { PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: "echo hooked" }] }] } });
+  if (behavior === "edit-asterweave" && scopeName === "project") save(cwd + sep + ".claude" + sep + "asterweave.json", { qualityGates: { required: [{ command: "echo gate" }] } });
+  if (behavior === "leak-token") message += " token=" + "gh" + "p_" + "A".repeat(36);
+  process.stdout.write(message + NL);
+  process.exitCode = behavior === "fail-after-write" ? 1 : 0;
+}
+
 if (args.includes("--version")) console.log(scenario.version ?? "2.1.5 (Claude Code)");
+else if (adminArgv()) admin(adminArgv());
 else main();

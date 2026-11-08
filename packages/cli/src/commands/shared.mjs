@@ -93,3 +93,30 @@ export function stringOption(ctx, name, remediation) {
   if (typeof value !== "string" || !value.trim()) throw new UsageError(`--${name} requires a value.`, { remediation });
   return value.trim();
 }
+
+/**
+ * Interrupt handling for a command that supervises a child: the first SIGINT/SIGTERM aborts `signal` (the caller kills the child and reports),
+ * a second one ends the process (exit 130). `ctx.signal` (a test seam) aborts it too. Call `dispose()` when done.
+ * @returns {{signal: AbortSignal, dispose: () => void}}
+ */
+export function interruptSignal(ctx) {
+  const controller = new AbortController();
+  const proc = ctx.proc ?? process;
+  const onSignal = () => {
+    if (controller.signal.aborted) proc.exit?.(EXIT.INTERRUPTED);
+    else controller.abort();
+  };
+  const onParent = () => controller.abort();
+  if (ctx.signal?.aborted) controller.abort();
+  else ctx.signal?.addEventListener("abort", onParent, { once: true });
+  proc.on?.("SIGINT", onSignal);
+  proc.on?.("SIGTERM", onSignal);
+  return {
+    signal: controller.signal,
+    dispose() {
+      proc.removeListener?.("SIGINT", onSignal);
+      proc.removeListener?.("SIGTERM", onSignal);
+      ctx.signal?.removeEventListener("abort", onParent);
+    },
+  };
+}
