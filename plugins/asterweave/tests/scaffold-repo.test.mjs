@@ -288,3 +288,26 @@ test("a blueprint may propose an adapter with hooks, and an invalid hook blocks 
   assert.equal(bad.valid, false);
   assert.match(bad.errors.join("\n"), /validate hooks are only allowed/);
 });
+
+test("accepts completion.requiredChecks (at most 50 non-empty strings) and rejects invalid ones, consistent with the adapter schema", () => {
+  const root = workspace();
+  writeFileSync(join(root, "package.json"), "{}\n");
+  mkdirSync(join(root, ".claude"), { recursive: true });
+  const adapterPath = join(root, ".claude", "asterweave.json");
+  const errorsFor = (completion) => {
+    writeFileSync(adapterPath, JSON.stringify({ version: 1, completion }));
+    return verifyScaffold(root).errors.join("\n");
+  };
+  assert.equal(errorsFor({ requiredChecks: [".github/workflows/ci.yml", "build"], parallelism: { maxWorkers: 2 } }), "");
+  assert.equal(errorsFor({ requiredChecks: [] }), "");
+  assert.match(errorsFor({ requiredChecks: "ci" }), /requiredChecks must be an array of strings/);
+  assert.match(errorsFor({ requiredChecks: ["ok", "", 3] }), /requiredChecks\[1\] must be a non-empty string/);
+  assert.match(errorsFor({ requiredChecks: ["x".repeat(201)] }), /requiredChecks\[0\]/);
+  assert.match(errorsFor({ requiredChecks: ["  "] }), /requiredChecks\[0\] must be a non-empty string/);
+  assert.equal(JSON.parse(readFileSync(new URL("../schemas/repository-adapter.schema.json", import.meta.url), "utf8")).properties.completion.properties.requiredChecks.items.pattern, "\\S", "the schema rejects whitespace-only strings as well");
+  assert.match(errorsFor({ requiredChecks: Array.from({ length: 51 }, (_, i) => `c${i}`) }), /at most 50/);
+  assert.match(errorsFor({ requiredCheck: ["ci"] }), /completion.requiredCheck is not a supported property/);
+  const schema = JSON.parse(readFileSync(new URL("../schemas/repository-adapter.schema.json", import.meta.url), "utf8"));
+  const checks = schema.properties.completion.properties.requiredChecks;
+  assert.deepEqual([checks.type, checks.maxItems, checks.items.type, checks.items.minLength, checks.items.maxLength], ["array", 50, "string", 1, 200]);
+});

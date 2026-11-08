@@ -55,6 +55,10 @@ Errors carry a stable machine-readable `code`. The ones you are most likely to s
 | `LOGIN_INTERRUPTED` | 130 | `auth login`, launch |
 | `GH_LOGIN_FAILED`, `CLAUDE_LOGIN_FAILED`, `LOGIN_CANCELLED`, `LAUNCH_CANCELLED`, `REPO_CONNECT_CANCELLED` | 1 | `auth login`, launch, `repo connect` |
 | `STORE_CORRUPT`, `STORE_UNREADABLE`, `STORE_WRITE_FAILED`, `CREDENTIAL_REFERENCE_INVALID`, `CREDENTIAL_REFERENCE_SECRET` | 1 | any command touching the user directory. For a corrupt `trust.json` the remediation is to run `trust revoke` or `trust grant`, which replace it |
+| `PIPELINE_NOT_FOUND`, `PIPELINE_PR_NOT_FOUND`, `PIPELINE_FORBIDDEN`, `PIPELINE_GITHUB_ERROR`, `PIPELINE_LOCKED`, `PIPELINE_LOG_CORRUPT`, `PIPELINE_LOG_TOO_LARGE` | 1 | `pipeline` (see [Pull request and pipeline monitoring](/cli/pipeline)); `watch` also exits 1 with a machine-readable `verdict` for every verdict except closable |
+| `PIPELINE_AUTH`, `GH_NOT_INSTALLED`, `GH_NOT_AUTHENTICATED` | 3 | `pipeline` (GitHub CLI sign-in) |
+| `PIPELINE_CONFIG_INVALID`, `PIPELINE_SCHEMA_TOO_NEW` | 5 | `pipeline` (`pipeline.json`, `completion.requiredChecks`, newer state files) |
+| `INTERRUPTED` | 130 | `pipeline` (Ctrl-C; the state stays resumable) |
 | `RUN_LOCKED` | 1 | `run` (another live process holds the run lock; a stale lock is taken over) |
 | `RUN_NOT_FOUND`, `RUN_NOT_ACTIVE`, `RUN_GRAPH_UNKNOWN`, `RUN_FOLD_FAILED` | 1 | `run` (see [Runs](/cli/runs#errors)) |
 | `RUN_EXISTS`, `RUN_CREATE_FAILED`, `RUN_CORRUPT`, `RUN_LEDGER_CORRUPT`, `RUN_LEDGER_UNREADABLE`, `RUN_TAIL_TORN`, `RUN_BEHIND`, `RUN_LOCK_REQUIRED`, `LOOP_RUNAWAY` | 1 | `run` (a run id that already exists; a run directory that cannot be created; a damaged or unreadable ledger; internal ledger preconditions) |

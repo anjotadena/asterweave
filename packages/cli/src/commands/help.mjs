@@ -3,6 +3,7 @@
 
 import { EXIT, UsageError } from "../exit-codes.mjs";
 import { mcpHelpText } from "./mcp.mjs";
+import { pipelineHelpText } from "./pipeline.mjs";
 import { sessionHelpText } from "./session.mjs";
 
 export const helpCommandMeta = Object.freeze({ summary: "Show help for asterweave or one command", boolean: [], options: [] });
@@ -181,6 +182,7 @@ export const COMMAND_HELP = Object.freeze({
   ]),
   mcp: block(mcpHelpText.split("\n")),
   session: block(sessionHelpText.trimEnd().split("\n")),
+  pipeline: block(pipelineHelpText.trimEnd().split("\n")),
   trust: block([
     "asterweave trust - review, grant or revoke trust for a repository",
     "",

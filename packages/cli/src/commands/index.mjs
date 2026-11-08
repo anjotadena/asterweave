@@ -17,6 +17,7 @@ import { configCommand, configCommandMeta } from "./config.mjs";
 import { doctorCommand, doctorCommandMeta } from "./doctor.mjs";
 import { COMMAND_HELP, helpCommand, helpCommandMeta } from "./help.mjs";
 import { hookCommand, hookCommandMeta } from "./hook.mjs";
+import { pipelineCommand, pipelineCommandMeta } from "./pipeline.mjs";
 import { repoCommand, repoCommandMeta } from "./repo.mjs";
 import { mcpCommand, mcpCommandMeta } from "./mcp.mjs";
 import { modelCommand, modelCommandMeta } from "./model.mjs";
@@ -72,6 +73,7 @@ export function registerAllCommands(registry, { loadLaunch } = {}) {
   add("trust", trustCommand, trustCommandMeta);
   add("run", runCommand, runCommandMeta);
   add("session", sessionCommand, sessionCommandMeta);
+  add("pipeline", pipelineCommand, pipelineCommandMeta);
   add("usage", usageCommand, usageCommandMeta);
   add("model", modelCommand, modelCommandMeta);
   add("mcp", mcpCommand, mcpCommandMeta);
