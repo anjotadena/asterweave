@@ -201,6 +201,11 @@ async function preToolUse(ctx) {
   const message = decision.detail?.message || decision.reason;
   if (decision.decision === "allow") return "";
   if (decision.decision === "require-approval") {
+    // Inside an Asterweave run (the runner sets ASTERWEAVE_RUN_ID) claude is headless: nobody can answer an "ask", and what
+    // happens to one is unverified. Refuse, with a way forward, instead.
+    if (typeof (ctx.env ?? process.env).ASTERWEAVE_RUN_ID === "string" && (ctx.env ?? process.env).ASTERWEAVE_RUN_ID !== "") {
+      return deny(`${message}; this needs a person's approval and a headless run cannot ask for one. Do not retry it: choose another approach, or report it in your evidence so a person can do it at a terminal`);
+    }
     const advice = decision.reason === "DEFAULT_BRANCH_PUSH" ? "Asterweave lands work through /asterweave:submit-pr and CI; approve only if you asked for a direct push." : "Approve only if you asked for this.";
     return document("ask", `Asterweave: ${message}. ${advice}`);
   }

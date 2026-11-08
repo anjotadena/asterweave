@@ -142,7 +142,7 @@ export function budgetLine(used, limit) {
 export function toolCallsByNode(events) {
   const counts = Object.create(null);
   for (const event of Array.isArray(events) ? events : []) {
-    if (event?.type === "action.started" && typeof event.node === "string") counts[event.node] = (counts[event.node] ?? 0) + 1;
+    if ((event?.type === "action.started" || event?.type === "tool.observed") && typeof event.node === "string") counts[event.node] = (counts[event.node] ?? 0) + 1;
   }
   return counts;
 }

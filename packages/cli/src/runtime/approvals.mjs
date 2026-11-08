@@ -3,22 +3,33 @@
 //
 //   Approval = { id, kind: "plan" | "operation", scope: {operation, target}, artifact: string | null,
 //                subjectHash, policyHash, revision: number | null, requestedAt,
+//                nonceHash: string | null, nonceExpiresAt: string | null, failedAttempts: number, lastFailedAt: string | null,
 //                by: {source: "tty" | "flag", name} | null, grantedAt: string | null, invalidatedAt: string | null }
 //
 // An approval is VALID only while it is granted, not invalidated, bound to the policy now in force, and (for
 // an artifact approval) the artifact it covers still has the same hash and revision. A changed artifact
 // invalidates every approval of it and of everything that depends on it, transitively.
 //
-// Approvals come ONLY from a person: the source of a grant is `tty` (an interactive prompt) or `flag` (a
-// command-line flag that also quotes the subject hash shown by `run show`). Model output, repository files,
-// MCP replies and image text can never be a source, and a process that runs inside a run (it has
-// ASTERWEAVE_RUN_ID in its environment) can never grant anything.
+// Approvals come ONLY from a person: the source of a grant is `tty` (an interactive y/N prompt on a real terminal)
+// or `flag` (command-line flags that quote the subject hash shown by `run show` AND the one-time NONCE that only the
+// supervising process printed on its own interactive terminal). Model output, repository files, MCP replies and image
+// text can never be a source.
 //
-// LIMIT OF THAT LAST RULE. The ASTERWEAVE_RUN_ID refusal is ADVISORY: a child process of a run can simply unset
-// the variable. Phase B only carries out SIMULATED tools, so nothing untrusted can start such a child. A real tool
-// dispatcher MUST NOT ship before approvals have a non-forgeable path (for example a per-request nonce shown only on
-// an interactive terminal with only its hash stored, or terminal-only grants) and the dispatched processes run
-// under OS-level isolation.
+// NONCE MODEL (Phase D-b). When a request is created, the supervising process draws a random 128-bit nonce. Only its
+// sha256 (`nonceHash`) is stored in the request (run.json / ledger); the plaintext is returned to the caller in memory
+// (`requestApproval(...).nonce`), shown only on the supervisor's own stderr when that is a TTY, and never written to
+// disk, a ledger event, a hook payload, a child's stdio or environment, or any JSON output. A headless supervisor prints
+// nothing: such a request can only be approved in an interactive terminal (`run approve` with no flags). A flag grant
+// needs `--nonce`, compared in constant time with the stored hash, single use (the grant clears the hash), valid for
+// NONCE_TTL_MS, and locked for LOCK_MS after MAX_FAILED_ATTEMPTS wrong tries (the counter lives in the request record,
+// as ledger events, so a restart does not reset it). A request created before this model (no `nonceHash`) can only be
+// approved at the terminal prompt.
+//
+// WHAT THIS IS NOT. It is DEFENCE IN DEPTH, not a sandbox. A process that runs as the same OS user can read the
+// user's files, may attach to the console on Windows (AttachConsole / CONOUT$), or simply impersonate the terminal;
+// the environment markers checked by `agentContextMarker` (ASTERWEAVE_RUN_ID, ASTERWEAVE_SESSION_ID, CLAUDECODE,
+// CLAUDE_CODE_*) are advisory because a child can unset them. Real isolation of dispatched processes needs OS-level
+// sandboxing, which this package does not provide.
 //
 // WHAT YOU APPROVE IS WHAT YOU SEE. The subject hash binds the RAW scope target, so the loop only creates an
 // approval request for a scope that displays faithfully (displayProblem): short enough to be shown whole, no
@@ -27,7 +38,7 @@
 // targets never look the same (blank fillers, variation selectors, combining marks and Cyrillic look-alikes are visible).
 // The escaped form may not exceed DISPLAY_ESCAPED_LIMIT (4 x DISPLAY_LIMIT) characters.
 
-import { createHash } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { CliError, EXIT } from "../exit-codes.mjs";
 import { redactText, sanitizeForTerminal } from "../redact.mjs";
 import { canonicalJson } from "./graph.mjs";
@@ -44,8 +55,19 @@ export const DISPLAY_LIMIT = 2000;
 export const REQUESTERS = Object.freeze(["executor", "guard", "hook"]);
 const INVISIBLE = /[\p{Cc}\p{Cf}\p{Co}\p{Cs}\p{Zl}\p{Zp}]|[^\S ]/u;
 
+/** How long an issued nonce can be used, how many wrong tries lock a request, and for how long. */
+export const NONCE_TTL_MS = 60 * 60 * 1000;
+export const MAX_FAILED_ATTEMPTS = 5;
+export const LOCK_MS = 10 * 60 * 1000;
+
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const sha256 = (text) => createHash("sha256").update(text).digest("hex");
+
+/** ISO time NONCE_TTL_MS after `now`; null when `now` is not a parseable time. */
+function expiryFrom(now) {
+  const ms = Date.parse(now);
+  return Number.isFinite(ms) ? new Date(ms + NONCE_TTL_MS).toISOString() : null;
+}
 
 function fail(message, code, exitCode = EXIT.ERROR, remediation) {
   throw new CliError(message, { code, exitCode, remediation });
@@ -107,6 +129,80 @@ function checkScope(scope) {
   return { operation: scope.operation, target: scope.target };
 }
 
+// --- nonce -----------------------------------------------------------------------------------------
+
+/**
+ * A fresh nonce: 128 random bits as 32 lowercase hex characters in groups of eight (`1a2b3c4d-...`).
+ * @param {(size: number) => Uint8Array} [rng]  Seam for tests; the default is crypto.randomBytes.
+ */
+export function generateNonce(rng = randomBytes) {
+  const bytes = rng(16);
+  if (!(bytes instanceof Uint8Array) || bytes.length !== 16) throw new TypeError("the nonce source must return 16 bytes");
+  return Buffer.from(bytes).toString("hex").replace(/(.{8})(?=.)/g, "$1-");
+}
+
+/** The form that is hashed: dashes and whitespace removed, lower case. `null` when it cannot be a nonce. */
+export function normalizeNonce(value) {
+  if (typeof value !== "string" || value.length > 64) return null;
+  const text = value.replace(/[-\s]/g, "").toLowerCase();
+  return /^[0-9a-f]{32}$/.test(text) ? text : null;
+}
+
+/** sha256 (hex) of the normalised nonce; `null` for a malformed one. */
+export function nonceHashOf(value) {
+  const text = normalizeNonce(value);
+  return text === null ? null : sha256(text);
+}
+
+/** Names of the environment markers that say "this process is driven by a run or an agent" (values never read out). */
+export function agentContextMarker(env = process.env) {
+  if (!isObject(env)) return null;
+  for (const name of ["ASTERWEAVE_RUN_ID", "ASTERWEAVE_SESSION_ID", "CLAUDECODE"]) {
+    if (typeof env[name] === "string" && env[name] !== "") return name;
+  }
+  for (const [name, value] of Object.entries(env)) {
+    if (/^CLAUDE_CODE_/i.test(name) && typeof value === "string" && value !== "") return name;
+  }
+  return null;
+}
+
+/** Throws (exit 7) when the environment shows the process is inside a run or an agent session. */
+export function assertHumanContext(env, what = "Approvals") {
+  const marker = agentContextMarker(env);
+  if (marker !== null) {
+    fail(`${what} cannot be granted from inside a run or an agent session (${marker} is set).`, "APPROVAL_FORBIDDEN_CONTEXT", EXIT.POLICY_DENIED, "Approve in a terminal of your own that is not driven by the run or by an agent.");
+  }
+}
+
+/** Milliseconds since the epoch until which the request is locked after too many wrong nonces, or null. */
+export function lockedUntil(approval, nowMs) {
+  const failed = approval?.failedAttempts ?? 0;
+  if (failed < MAX_FAILED_ATTEMPTS) return null;
+  const until = Date.parse(approval.lastFailedAt ?? "") + LOCK_MS;
+  return Number.isFinite(until) && nowMs < until ? until : null;
+}
+
+/** The ledger record for one wrong nonce (applyApprovalEvent counts it). */
+export function failedAttemptEvent(approval, now) {
+  return { type: "approval.attempt-failed", approvalId: approval.id, at: now };
+}
+
+/**
+ * Replace the nonce of a pending request (a supervisor that restarted does not hold the old plaintext).
+ * The wrong-try counter is NOT reset. Returns the plaintext in memory only. A TTY supervisor that does this INVALIDATES every nonce
+ * it replaces (an earlier terminal's code stops working). A legacy request without a nonceHash field gets none (nonce: null).
+ * @returns {{run: object, events: object[], nonce: string|null}}
+ */
+export function reissueNonce(run, id, { now, rng } = {}) {
+  const approval = findApproval(run, id);
+  if (!approval || approval.grantedAt !== null || approval.invalidatedAt !== null) fail("There is no pending approval to issue a nonce for.", "APPROVAL_NOT_FOUND");
+  // A request created before the nonce model (no nonceHash field at all) is terminal-only for good: it never gets a nonce.
+  if (!Object.hasOwn(approval, "nonceHash")) return { run, events: [], nonce: null };
+  const nonce = generateNonce(rng);
+  const event = { type: "approval.nonce-issued", approvalId: approval.id, nonceHash: nonceHashOf(nonce), nonceExpiresAt: expiryFrom(now), issuedAt: now };
+  return { run: applyApprovalEvent(run, event), events: [event], nonce };
+}
+
 /** Approvals still waiting for a person: not granted and not invalidated. */
 export function pendingApprovals(run) {
   return (run?.approvals ?? []).filter((approval) => approval.grantedAt === null && approval.invalidatedAt === null);
@@ -161,6 +257,24 @@ export function applyApprovalEvent(run, event) {
     if (approval && approval.grantedAt === null) {
       approval.by = structuredClone(event.by);
       approval.grantedAt = event.grantedAt;
+      // A nonce is single use: once the request is granted nothing can be checked against it again.
+      if (Object.hasOwn(approval, "nonceHash")) {
+        approval.nonceHash = null;
+        approval.nonceExpiresAt = null;
+      }
+    }
+  } else if (event.type === "approval.nonce-issued") {
+    const approval = next.approvals.find((entry) => entry.id === event.approvalId);
+    if (approval && approval.grantedAt === null && approval.invalidatedAt === null && /^[0-9a-f]{64}$/.test(String(event.nonceHash))) {
+      approval.nonceHash = event.nonceHash;
+      approval.nonceExpiresAt = typeof event.nonceExpiresAt === "string" ? event.nonceExpiresAt : null;
+    }
+  } else if (event.type === "approval.attempt-failed") {
+    const approval = next.approvals.find((entry) => entry.id === event.approvalId);
+    if (approval && typeof event.at === "string") {
+      const expired = (approval.failedAttempts ?? 0) >= MAX_FAILED_ATTEMPTS && lockedUntil(approval, Date.parse(event.at)) === null;
+      approval.failedAttempts = (expired ? 0 : (approval.failedAttempts ?? 0)) + 1;
+      approval.lastFailedAt = event.at;
     }
   } else if (event.type === "approval.invalidated") {
     const approval = next.approvals.find((entry) => entry.id === event.approvalId);
@@ -177,10 +291,12 @@ export function applyApprovalEvent(run, event) {
  * @param {{kind: "plan"|"operation", scope: {operation: string, target: string}, now: string, artifact?: string|null,
  *   subjectHash?: string, reason?: string}} options  `plan` approvals name the `artifact` they cover (its current
  *   hash and revision are bound); `operation` approvals are bound to the hash of their scope. `requestedBy`
- *   (executor | guard | hook) is recorded on the approval and shown next to it.
- * @returns {{run: object, events: object[], approval: object, created: boolean}}
+ *   (executor | guard | hook) is recorded on the approval and shown next to it. `rng(size)` is a test seam for the nonce.
+ * @returns {{run: object, events: object[], approval: object, created: boolean, nonce: string | null}}
+ *   `nonce` is the plaintext one-time nonce of a NEW request (null when the request already existed). It is returned in
+ *   memory only for the supervisor to show on its own terminal; the record and the event hold only its hash.
  */
-export function requestApproval(run, { kind, scope, now, artifact = null, subjectHash, reason, requestedBy } = {}) {
+export function requestApproval(run, { kind, scope, now, artifact = null, subjectHash, reason, requestedBy, rng, issueNonce = true } = {}) {
   if (!APPROVAL_KINDS.includes(kind)) fail("Unknown approval kind.", "APPROVAL_KIND_INVALID", EXIT.USAGE);
   if (requestedBy !== undefined && !REQUESTERS.includes(requestedBy)) fail("Unknown approval requester.", "APPROVAL_REQUESTER_INVALID", EXIT.USAGE);
   const cleanScope = checkScope(scope);
@@ -207,7 +323,10 @@ export function requestApproval(run, { kind, scope, now, artifact = null, subjec
       approval.revision === revision &&
       approval.policyHash === (run.policyHash ?? null),
   );
-  if (existing) return { run, events: [], approval: existing, created: false };
+  if (existing) return { run, events: [], approval: existing, created: false, nonce: null };
+  // A headless supervisor (no terminal to show a nonce on) passes issueNonce: false: nothing is stored, so a flag grant is refused
+  // with APPROVAL_TERMINAL_REQUIRED and only the terminal prompt can approve.
+  const nonce = issueNonce ? generateNonce(rng) : null;
   const approval = {
     id: `ap-${(run.approvals ?? []).length + 1}`,
     kind,
@@ -218,12 +337,46 @@ export function requestApproval(run, { kind, scope, now, artifact = null, subjec
     revision,
     requestedAt: now,
     requestedBy: requestedBy ?? null,
+    nonceHash: nonce === null ? null : nonceHashOf(nonce),
+    nonceExpiresAt: nonce === null ? null : expiryFrom(now),
+    failedAttempts: 0,
+    lastFailedAt: null,
     by: null,
     grantedAt: null,
     invalidatedAt: null,
   };
   const event = { type: "approval.requested", approval, ...(reason ? { reason: String(reason).slice(0, 500) } : {}) };
-  return { run: applyApprovalEvent(run, event), events: [event], approval, created: true };
+  return { run: applyApprovalEvent(run, event), events: [event], approval, created: true, nonce };
+}
+
+const TERMINAL_HINT = "Approve in a terminal: run `asterweave run approve <runId>` with no flags and answer the prompt.";
+
+/**
+ * The nonce gate of a flag grant. Throws APPROVAL_TERMINAL_REQUIRED (exit 2: no nonce was ever issued to a person, or none
+ * was quoted), APPROVAL_LOCKED / APPROVAL_NONCE_INVALID (exit 7; the latter is the one the caller counts), or
+ * APPROVAL_NONCE_EXPIRED.
+ */
+function checkNonce(approval, nonce, now) {
+  const stored = approval.nonceHash;
+  if (typeof stored !== "string" || !/^[0-9a-f]{64}$/.test(stored)) {
+    fail(`Approval ${approval.id} cannot be granted with flags: no nonce is outstanding for it.`, "APPROVAL_TERMINAL_REQUIRED", EXIT.USAGE, TERMINAL_HINT);
+  }
+  if (nonce === undefined || nonce === null || nonce === "") {
+    fail(`Approval ${approval.id} needs --nonce, the one-time code the supervising process printed on its own terminal.`, "APPROVAL_TERMINAL_REQUIRED", EXIT.USAGE, TERMINAL_HINT);
+  }
+  const nowMs = Date.parse(now);
+  const until = lockedUntil(approval, nowMs);
+  if (until !== null) {
+    fail(`Approval ${approval.id} is locked after ${MAX_FAILED_ATTEMPTS} wrong nonces.`, "APPROVAL_LOCKED", EXIT.POLICY_DENIED, `${TERMINAL_HINT} The flag path unlocks at ${new Date(until).toISOString()}.`);
+  }
+  if (Number.isFinite(nowMs) && typeof approval.nonceExpiresAt === "string" && Date.parse(approval.nonceExpiresAt) <= nowMs) {
+    fail(`The nonce of approval ${approval.id} expired.`, "APPROVAL_NONCE_EXPIRED", EXIT.ERROR, TERMINAL_HINT);
+  }
+  const given = nonceHashOf(nonce);
+  const match = given !== null && timingSafeEqual(Buffer.from(given, "hex"), Buffer.from(stored, "hex"));
+  if (!match) {
+    fail(`The nonce does not match approval ${approval.id}.`, "APPROVAL_NONCE_INVALID", EXIT.POLICY_DENIED, TERMINAL_HINT);
+  }
 }
 
 /**
@@ -233,15 +386,15 @@ export function requestApproval(run, { kind, scope, now, artifact = null, subjec
  * @param {string} id
  * @param {{by: {source: "tty"|"flag", name: string}, now: string, subject?: string, policyHash?: string|null,
  *   env?: Record<string, string|undefined>}} options
- *   `subject` is the hash prefix quoted from `run show`; it is REQUIRED for the `flag` source.
+ *   `subject` is the hash prefix quoted from `run show`; it is REQUIRED for the `flag` source, together with `nonce`
+ *   (the one-time code from the supervisor's terminal; see the NONCE MODEL above). A `tty` grant needs neither: the CLI
+ *   only uses that source after a real interactive prompt. Any agent marker in `env` refuses the grant (exit 7).
  *   `policyHash`, when given, must be the policy still in force.
  * @returns {{run: object, events: object[], approval: object}}
  * @throws {CliError}
  */
-export function grantApproval(run, id, { by, now, subject, policyHash, env = process.env } = {}) {
-  if (typeof env?.ASTERWEAVE_RUN_ID === "string" && env.ASTERWEAVE_RUN_ID !== "") {
-    fail("Approvals cannot be granted from inside a run.", "APPROVAL_FORBIDDEN_CONTEXT", EXIT.ERROR, "Run `asterweave run approve` yourself, in a terminal that is not driven by the run.");
-  }
+export function grantApproval(run, id, { by, now, subject, nonce, policyHash, env = process.env } = {}) {
+  assertHumanContext(env);
   if (!isObject(by) || !GRANT_SOURCES.includes(by.source)) {
     fail("An approval can only be granted from a terminal prompt (tty) or an explicit command-line flag (flag).", "APPROVAL_SOURCE_INVALID", EXIT.USAGE);
   }
@@ -270,6 +423,7 @@ export function grantApproval(run, id, { by, now, subject, policyHash, env = pro
   if (by.source === "flag" && !matchesSubject(approval, subject)) {
     fail(`The subject does not match approval ${approval.id}; quote at least ${MIN_SUBJECT_PREFIX} hex characters of the subject hash from \`run show\`.`, "APPROVAL_SUBJECT_MISMATCH", EXIT.USAGE);
   }
+  if (by.source === "flag") checkNonce(approval, nonce, now);
   const name = redactText(sanitizeForTerminal(by.name.trim())).text;
   const event = { type: "approval.granted", approvalId: approval.id, kind: approval.kind, scope: approval.scope, subjectHash: approval.subjectHash, by: { source: by.source, name }, grantedAt: now };
   return { run: applyApprovalEvent(run, event), events: [event], approval: findApproval(applyApprovalEvent(run, event), approval.id) };

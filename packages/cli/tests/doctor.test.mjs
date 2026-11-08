@@ -27,8 +27,8 @@ const isGh =(cmd) => /(^|[\\/])gh(\.exe|\.com)?$/i.test(cmd);
 const notConnected = async () => ({ ok: true, connected: false });
 
 /** spawn that answers `gh auth status` and `claude auth status`; either reply can be overridden. */
-function providers({ gh = { stdout: ghHosts([ghEntry()]) }, claude = { stdout: claudeStatus() } } = {}) {
-  return fakeSpawn((cmd) => (isGh(cmd) ? gh : claude));
+function providers({ gh = { stdout: ghHosts([ghEntry()]) }, claude = { stdout: claudeStatus() }, version = { stdout: "2.1.5 (Claude Code)" } } = {}) {
+  return fakeSpawn((cmd, args) => (isGh(cmd) ? gh : args[0] === "--version" ? version : claude));
 }
 
 function options(box, extra = {}) {
@@ -358,18 +358,18 @@ describe("runDoctor: repository trust", () => {
     writeGovernedRepo(repo);
     const spawn = providers();
     await runDoctor(options(box, { spawn, repoStatus: async () => ({ ok: true, connected: true, repository: "acme/widgets", branch: "main", path: repo }) }));
-    assert.equal(spawn.calls.length, 2); // gh auth status + claude auth status, nothing else
+    assert.equal(spawn.calls.length, 3); // gh auth status + claude auth status + claude --version, nothing else
     for (const call of spawn.calls) assert.doesNotMatch(JSON.stringify(call), /SENTINEL_GATE_COMMAND_TEXT/);
   });
 });
 
 describe("runDoctor: what doctor will and will not run", () => {
-  test("only the two read-only status probes run, in the user directory", async () => {
+  test("only the read-only status and version probes run, in the user directory", async () => {
     const box = sandbox();
     const spawn = providers();
     await runDoctor(options(box, { spawn }));
     const argvs = spawn.calls.map((call) => call.args);
-    assert.deepEqual(argvs.map((args) => args.join(" ")).sort(), ["auth status", "auth status --json hosts"]);
+    assert.deepEqual(argvs.map((args) => args.join(" ")).sort(), ["--version", "auth status", "auth status --json hosts"]);
     for (const args of argvs) {
       for (const forbidden of ["doctor", "-p", "--print", "--show-token", "-t"]) assert.ok(!args.includes(forbidden), `${forbidden} in ${args.join(" ")}`);
     }
@@ -518,5 +518,31 @@ describe("doctor command", () => {
     assert.equal(code, EXIT.OK);
     assert.equal(JSON.parse(io.out()).ok, true);
     assert.equal(io.err(), "");
+  });
+});
+
+describe("runDoctor: claude.runner", () => {
+  const runner = async (extra) => byId(await runDoctor(options(sandbox(), extra)), "claude.runner");
+
+  test("passes with the version when claude is recent enough", async () => {
+    const check = await runner();
+    assert.equal(check.status, "PASS");
+    assert.match(check.reason, /2\.1\.5/);
+  });
+
+  test("not installed is a WARN with install guidance, never a FAIL", async () => {
+    const box = sandbox();
+    const report = await runDoctor(options(box, { exists: present("gh") }));
+    const check = byId(report, "claude.runner");
+    assert.equal(check.status, "WARN");
+    assert.match(check.remediation, /Install/);
+    assert.equal(report.ok, true);
+  });
+
+  test("an old or unreadable version is a WARN", async () => {
+    assert.equal((await runner({ spawn: providers({ version: { stdout: "2.0.9 (Claude Code)\n" } }) })).status, "WARN");
+    const unreadable = await runner({ spawn: providers({ version: { stdout: "hello\n" } }) });
+    assert.equal(unreadable.status, "WARN");
+    assert.match(unreadable.reason, /Could not read/);
   });
 });

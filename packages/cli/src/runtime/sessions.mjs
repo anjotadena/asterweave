@@ -594,6 +594,15 @@ export function linkRun(repoKey, idOrPrefix, link, options = {}) {
   });
 }
 
+/** Record the provider (claude) session id of the runner on the session, so a later turn can resume it. Idempotent. */
+export function setProviderSession(repoKey, idOrPrefix, providerSessionId, options = {}) {
+  if (typeof providerSessionId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$/.test(providerSessionId)) throw new TypeError("providerSessionId is not a valid provider session id.");
+  return mutate(repoKey, idOrPrefix, options, ({ dir, record }) => {
+    if (record.providerSessionId === providerSessionId) return { session: record, changed: false };
+    return { session: commit(dir, record, { type: "provider-session", patch: { providerSessionId } }, options), changed: true };
+  });
+}
+
 /** Audit event: a resume was planned and found ready. The session is not otherwise changed. */
 export function markResumed(repoKey, idOrPrefix, options = {}) {
   return mutate(repoKey, idOrPrefix, options, ({ dir, record }) => ({ session: commit(dir, record, { type: "resumed", planned: true }, options) }));

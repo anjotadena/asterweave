@@ -11,12 +11,13 @@
 //
 // Check ids are stable (they are part of the `--json` contract) and always appear in this order:
 //   node.version, user-dir.writable, config.valid, github.install, github.auth, github.scopes,
-//   model.claude, account.asterweave, repo.connection, repo.trust
+//   model.claude, claude.runner, account.asterweave, repo.connection, repo.trust
 
 import * as nodeFs from "node:fs";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { probeAll } from "./auth/index.mjs";
+import { probeClaudeRunner } from "./auth/claude.mjs";
 import { DEFAULT_HOST, REQUIRED_SCOPES } from "./auth/github.mjs";
 import { ConfigError, resolveConfig } from "./config.mjs";
 import { resolveUserDir } from "./paths.mjs";
@@ -35,6 +36,7 @@ export const CHECK_IDS = Object.freeze([
   "github.auth",
   "github.scopes",
   "model.claude",
+  "claude.runner",
   "account.asterweave",
   "repo.connection",
   "repo.trust",
@@ -159,6 +161,12 @@ function modelCheck(probe) {
   if (probe.status === "ok") return check("model.claude", "PASS", probe.reason);
   // Model-provider sign-in is never a blocker (user amendment): every non-OK result is a WARN.
   return check("model.claude", "WARN", `${probe.reason} Model sign-in is not required to start Asterweave.`, probe.remediation);
+}
+
+// claude.runner: `claude --version` only. Not installed or too old is a WARN (the runner is optional for everything else).
+function runnerCheck(probe) {
+  if (probe.status === "ok") return check("claude.runner", "PASS", probe.reason);
+  return check("claude.runner", "WARN", `${probe.reason} Needed only for 'asterweave run start'.`, probe.remediation);
 }
 
 const accountCheck = () => check("account.asterweave", "PASS", "unavailable: no hosted backend configured (local sessions unaffected)");
@@ -304,9 +312,10 @@ export async function runDoctor(options = {}) {
   }
 
   // Provider probes and the repository status are independent: run them together.
-  const [probes, repoRead] = await Promise.all([
+  const [probes, repoRead, runnerProbe] = await Promise.all([
     probeAll({ ...shared, host }).catch((error) => ({ error })),
     readRepoStatus(injectedRepoStatus, shared),
+    probeClaudeRunner(shared).catch((error) => ({ status: "warn", reason: `Check could not complete: ${messageOf(error)}`, remediation: "Re-run `asterweave doctor`." })),
   ]);
 
   const connected = !repoRead.error && repoRead.result.connected === true;
@@ -321,6 +330,7 @@ export async function runDoctor(options = {}) {
     guard(["github.install", "github.auth", "github.scopes"], () => set(...githubChecks(probes.github)));
     guard(["model.claude"], () => set(modelCheck(probes.model)));
   }
+  guard(["claude.runner"], () => set(runnerCheck(runnerProbe)));
   set(accountCheck());
   guard(["repo.connection"], () => set(repoConnectionCheck(repoRead)));
 

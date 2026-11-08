@@ -8,18 +8,22 @@ description: "Asterweave CLI runs (Phase B): run show, approve and abort, the de
 
 A **run** is one pass of a workflow graph (`delivery@1` or `bugfix@1`) over a goal, kept on disk so it survives a crash, a Ctrl+C or a machine restart. Phase B of the CLI adds the run engine: the graph state machine, the persistent ledger, the run lock, approvals, budgets, the guard and hooks.
 
-:::caution What is simulated in Phase B
-**Phase B carries out no tool for real and calls no model.** There are **no model calls** and **no real tool execution**. The only executor is a scripted **fake executor** that replays a JSON file of actions, and the tool dispatcher is a simulation that records what it was asked to do and returns canned results. Every action still goes through the full guard, hooks, budgets and audit trail, so the safety behavior is real, but no action of a run writes a file, runs a command or touches the network. Exactly what does run on your machine: the **hooks** you configured (processes started without a shell; see [Hooks](/cli/hooks)), and the read-only `git` queries that identify the repository. The same simulation is why two safety limits below are deliberately advisory: a real tool dispatcher must not ship before approvals have a non-forgeable path (for example a per-request nonce shown only on an interactive terminal, with only its hash stored, or terminal-only grants) and the processes it starts are isolated by the operating system. The commands that start or resume a run are hidden behind an environment variable (see [Development commands](#development-commands-hidden)). A real executor arrives in a later phase.
+:::caution What is simulated with the fake executor
+This page describes the run engine. With the **fake executor** (a development switch), **nothing is carried out for real and no model is called**. A normal `run start` drives Claude Code instead, and Claude executes its own tools: see [the runner](/cli/runner) for what is guarded and how. The rest of this paragraph describes the fake executor.
+
+**The fake executor carries out no tool for real and calls no model.** There are **no model calls** and **no real tool execution**. The only executor is a scripted **fake executor** that replays a JSON file of actions, and the tool dispatcher is a simulation that records what it was asked to do and returns canned results. Every action still goes through the full guard, hooks, budgets and audit trail, so the safety behavior is real, but no action of a run writes a file, runs a command or touches the network. Exactly what does run on your machine: the **hooks** you configured (processes started without a shell; see [Hooks](/cli/hooks)), and the read-only `git` queries that identify the repository. The same simulation is why two safety limits below are deliberately advisory: a real tool dispatcher must not ship before approvals have a non-forgeable path (for example a per-request nonce shown only on an interactive terminal, with only its hash stored, or terminal-only grants) and the processes it starts are isolated by the operating system. The commands that start or resume a run are hidden behind an environment variable (see [Development commands](#development-commands-hidden)). A real executor arrives in a later phase.
 :::
 
 ## Public commands
 
-All three commands work on the runs of the repository you are in (run them inside the clone). A run id is 1 to 64 letters, digits, `-` or `_`.
+These commands work on the runs of the repository you are in (run them inside the clone). A run id is 1 to 64 letters, digits, `-` or `_`.
 
 | Command | What it does | Flags |
 | --- | --- | --- |
+| `asterweave run start <goal>` | Create a run and drive it with the Claude runner: [The Claude runner](/cli/runner) | `--workflow`, `--session`, `--worktree`, `--runner`, `--json` |
+| `asterweave run resume <runId>` | Continue a paused, blocked or approved run with the same runner | `--json` |
 | `asterweave run show [runId]` | Graph, status, per-node attempts, approvals (with the subject hash prefix), budgets, the run lock and the policy. Without a run id: the newest run of this repository | `--json` |
-| `asterweave run approve <runId>` | Record an approval for a waiting run | `--approval id`, `--subject hash`, `--json` |
+| `asterweave run approve <runId>` | Record an approval for a waiting run. **Terminal only** (see below) | `--approval id`, `--subject hash`, `--nonce code`, `--json` |
 | `asterweave run abort <runId>` | Stop a run for good. Already aborted: nothing happens (idempotent) | `--yes`, `--json` |
 
 `run show` reads without taking the lock, so it works while a run is being driven. Tokens are shown as `unavailable` when the executor did not report usage; they are never shown as 0.
@@ -38,8 +42,10 @@ Nodes
 Approvals
   ap-1  pending  plan plan -> approve
       subject 7b3e91c0d2a4  target 7 chars  requested by guard
-Approve with:
-  asterweave run approve demo-1 --approval ap-1 --subject 7b3e91c0d2a4
+Approve in a terminal (answer the prompt):
+  asterweave run approve demo-1
+Or with flags, quoting the one-time nonce the supervising terminal printed:
+  asterweave run approve demo-1 --approval ap-1 --subject 7b3e91c0d2a4 --nonce <nonce>
 ```
 
 ### `run show --json`
@@ -52,17 +58,19 @@ Approve with:
 
 ### `run approve`
 
-An approval is the only way a run gets past a plan checkpoint, a merge, a deploy, a default-branch push or any other operation that needs a person. It can only come from **you**:
+An approval is the only way a run gets past a plan checkpoint, a merge, a deploy, a default-branch push or any other operation that needs a person. It can only come from **you, at a terminal**:
 
 - **In a terminal**, `run approve <runId>` shows each waiting approval (kind, **who requested it** - `executor`, `guard` or `hook` -, scope, the **whole target** with its length, and the subject hash prefix) and asks `y/N`. The default is No. Newline, tab and backslash in a target are shown as the escapes `\n`, `\t` and `\\` so two different targets never look alike. The answers are applied **all or nothing**: every approval is validated first, and if any of them changed while you were deciding, nothing is granted.
-- **With flags** (scripts, CI shells you control): `run approve <runId> --approval <id> --subject <hash prefix>`. The subject must be the hash prefix that `run show` prints (at least 6 hex characters); a different prefix is a usage error (exit 2) and nothing is granted. `--approval` and `--subject` go together. Without them, `run approve` needs a terminal; with `--json` it always needs the flags.
-- It **refuses to run when `ASTERWEAVE_RUN_ID` is set**, so a process inside a run cannot grant itself approval. **This refusal is advisory**: a child process can simply unset the variable. It is acceptable only because Phase B carries out simulated tools. As a cheap hardening, `run show` hides the approval subject hashes (`hidden inside a run`) when the variable is set.
+- **With flags**: `run approve <runId> --approval <id> --subject <hash prefix> --nonce <code>`. The subject must be the hash prefix that `run show` prints (at least 6 hex characters); a different prefix is a usage error (exit 2). The **nonce** is a one-time 128-bit code that the process driving the run (`run start` or `run resume`) prints **only on its own terminal's stderr, and only when that stderr is a terminal**. Only the nonce's SHA-256 is stored (in `run.json` and the ledger); the plaintext is never written to disk, to an event, to a hook payload, to JSON output or to the environment or stdio of any child process. A headless driver (output piped or redirected, for example under CI or a launcher) prints no nonce at all: such requests can only be approved at the terminal prompt. If the driver was restarted it issues a fresh nonce (hash only) for requests it did not announce itself.
+- **Flags alone never grant.** Without `--nonce` the command exits 2 (`APPROVAL_TERMINAL_REQUIRED`, "approve in a terminal"). A wrong nonce exits 7 (`APPROVAL_NONCE_INVALID`) and is counted in the request record; **5 wrong tries lock that request's flag path for 10 minutes** (`APPROVAL_LOCKED`, exit 7; the terminal prompt is never locked). A nonce is **single use** (the grant clears it) and expires after one hour (`APPROVAL_NONCE_EXPIRED`). `--json` without flags is refused as well. A request recorded by an older build (no stored nonce hash) can only be approved at the terminal prompt.
+- **Agent environments are refused, exit 7.** `run approve` (flags or prompt) refuses to run when `ASTERWEAVE_RUN_ID`, `ASTERWEAVE_SESSION_ID`, `CLAUDECODE` or any `CLAUDE_CODE_*` variable is set (`APPROVAL_FORBIDDEN_CONTEXT`). That includes the integrated terminal of Claude Code itself: **running `asterweave run approve` from inside Claude Code's own terminal is refused by design**; open a separate terminal. As a cheap hardening, `run show` hides the approval subject hashes (`hidden inside a run`) when `ASTERWEAVE_RUN_ID` is set.
+- **This is defence in depth, not a sandbox.** The environment markers are advisory (a child process can unset them), and a process running as the same operating-system user can read your files and, on Windows, may attach to your console (`AttachConsole`, `CONOUT$`) and see what the driving terminal printed. That is why the nonce is not the only barrier and why the interactive prompt exists. Real isolation of tool processes needs operating-system sandboxing, which Asterweave does not provide.
 - Approvals are never read from repository files, model output, MCP servers or image text.
 - **What you approve is what you see.** The subject hash binds the raw target, so a request is only ever created for a target that displays faithfully: at most 2000 characters, no control, invisible or direction-changing characters, nothing that the secret redactor would rewrite. Otherwise the node ends `policy-denied` with reason `UNDISPLAYABLE_TARGET` (exit 7) and no request exists. A grant is also refused when the stored scope no longer matches the hash it was bound to.
 
 An approval is valid only while the thing it was granted for is unchanged: the same artifact hash and revision (for a plan), the same exact command or input (for an operation), and the same policy hash. A changed plan invalidates its approval and every approval that depends on it; a changed `policy.json` makes the run ask again before it goes on. `run approve` checks the policy hash in force now: a request made under another policy fails with `APPROVAL_STALE`, and the next `run resume` asks you to accept the policy change (the request to accept it names the new policy and can be granted), retires the requests of the old policy and asks again.
 
-Exit codes: 0 granted. 1 run not found, approval not found, approval already granted, invalidated, stale (`APPROVAL_STALE`) or changed while you were deciding, declined (`APPROVAL_DECLINED`), a scope that cannot be shown faithfully (`UNDISPLAYABLE_TARGET`). 2 usage. 130 interrupted. Every `run` command first checks that the work tree git reports belongs to the repository; a repository whose `.git/config` sets `core.worktree` to some other directory (for example a parent) fails with `REPO_WORKTREE_MISMATCH` (exit 1) because it would widen the guard's workspace root.
+Exit codes: 0 granted. 1 run not found, approval not found, approval already granted, invalidated, stale (`APPROVAL_STALE`) or changed while you were deciding, declined (`APPROVAL_DECLINED`), a scope that cannot be shown faithfully (`UNDISPLAYABLE_TARGET`), an expired nonce. 2 usage, including flags without `--nonce`. 7 agent environment markers, a wrong nonce or a locked request. 130 interrupted. Every `run` command first checks that the work tree git reports belongs to the repository; a repository whose `.git/config` sets `core.worktree` to some other directory (for example a parent) fails with `REPO_WORKTREE_MISMATCH` (exit 1) because it would widen the guard's workspace root.
 
 ### `run abort`
 
@@ -158,7 +166,7 @@ Every line of `events.jsonl` is `{v, seq, at, runId, type, ...}`. `v`, `seq`, `a
 | `action.proposed`, `action.started`, `action.completed`, `action.rejected`, `action.verified` | One executor action and its side effect |
 | `tool.decision` | Every guard decision: `decision`, `reason`, `ruleId`, evaluation `point` (`dispatch`, `advancement`, `retry`, `resume`, `node.before-enter`, `approval`) |
 | `evidence.recorded` | Evidence for the current attempt |
-| `approval.requested`, `approval.granted`, `approval.invalidated`, `policy.bound` | Approvals and the policy hash the run is bound to |
+| `approval.requested`, `approval.granted`, `approval.invalidated`, `approval.nonce-issued`, `approval.attempt-failed`, `policy.bound` | Approvals (with the nonce hash, never the nonce) and the policy hash the run is bound to |
 | `hook.result` | The outcome of each hook that ran (never its stdin payload) |
 | `budget.exhausted` | A budget ran out |
 | `ledger.repaired`, `ledger.folded` | Recovery bookkeeping (below) |
@@ -183,9 +191,9 @@ A second process that finds a live lock fails with `RUN_LOCKED` (exit 1) and lea
 
 An owner whose lock was taken over notices at its next heartbeat; from then on mutating actions are refused (`GUARD_UNAVAILABLE`, rule `lock-not-held`) and the ledger rejects its writes, so a deposed process cannot corrupt the run. `run show` displays the lock as `none`, `live` or `stale`, with the owner's pid.
 
-## Development commands (hidden)
+## Development commands (scripted fake executor)
 
-`run start` and `run resume` drive the loop with the fake executor. They are **hidden** (not in `help`) and only work when the environment variable `ASTERWEAVE_DEV_EXECUTORS=1` is set; otherwise they exit 2 with "not available". They exist to exercise the engine, not to do work.
+`run start` and `run resume` are public and use the Claude runner ([The Claude runner](/cli/runner)). Only the **scripted fake executor** behind them is development-only: it needs `ASTERWEAVE_DEV_EXECUTORS=1` (`--executor fake --script <file>`, or `--runner fake --script <file> <goal>`); without that variable these forms exit 2 with "not available". It exists to exercise the engine, not to do work.
 
 ```text
 asterweave run start --executor fake --script <file> [--graph delivery@1|bugfix@1] [--goal text] [--run-id id]
@@ -204,14 +212,14 @@ asterweave run resume <runId> --executor fake --script <file>
 
 Steps are consumed in order per node across the whole run. A step can also carry `delayMs` (a plain wait, or the duration of the tool call), `idempotent: false`, or be `{"node":"intake","malformed":"..."}` to test bad executor output (two re-asks, then the attempt fails with signature `executor:malformed-output`). When a node has no step left the executor answers `needs-human`. An invalid script is `SCRIPT_INVALID` (exit 2); script values are never echoed.
 
-### Headless approval walkthrough
+### Approval walkthrough
 
 ```bash
 export ASTERWEAVE_DEV_EXECUTORS=1
 asterweave run start --executor fake --script plan.json --run-id demo-1
 # ... stops at the plan checkpoint, exit 6
 asterweave run show demo-1                 # lists the approval and its subject hash prefix
-asterweave run approve demo-1 --approval ap-1 --subject 7b3e91c0d2a4
+asterweave run approve demo-1              # in a terminal of your own: review the target, answer y
 asterweave run resume demo-1 --executor fake --script plan.json   # continues from the checkpoint
 ```
 
@@ -225,7 +233,7 @@ A script that proposes `git reset --hard` instead ends the run with exit 7 (`DES
 | `RUN_NOT_FOUND`, `RUN_NOT_ACTIVE`, `RUN_ID_INVALID` | 1, 1, 2 | Unknown run or none for this repository; completed or aborted run; bad run id |
 | `RUN_SCHEMA_TOO_NEW` | 5 | The run was written by a newer Asterweave |
 | `RUN_GRAPH_UNKNOWN` | 1 | This build does not provide the run's graph in the same form |
-| `APPROVAL_*` | 1 | See `run approve` above; `APPROVAL_SUBJECT_MISMATCH` is a usage error (2) |
+| `APPROVAL_*` | 1 | See `run approve` above; `APPROVAL_SUBJECT_MISMATCH` and `APPROVAL_TERMINAL_REQUIRED` are usage errors (2); `APPROVAL_FORBIDDEN_CONTEXT`, `APPROVAL_NONCE_INVALID` and `APPROVAL_LOCKED` are exit 7 |
 | `POLICY_INVALID`, `HOOKS_INVALID` | 5 | A bad `policy.json` or hooks configuration; see [Policy and guards](/cli/policy-and-guards) and [Hooks](/cli/hooks) |
 | `SCRIPT_INVALID`, `SCRIPT_UNREADABLE` | 2 | The fake executor script is not valid, is larger than 2 MB (checked in bytes before it is read), or is not a readable regular file (a FIFO or a device is refused) |
 | `REPO_WORKTREE_MISMATCH` | 1 | `core.worktree` makes git report a work tree that is not the repository's own |

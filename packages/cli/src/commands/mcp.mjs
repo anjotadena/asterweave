@@ -2,17 +2,23 @@
 //
 // list / inspect / validate only PARSE configuration (repo `.mcp.json`, the user-level Claude file, plugin `.mcp.json` files):
 // they never start a process. `mcp test` is the ONLY command that spawns a server, and only to run initialize + tools/list
-// (never tools/call), after the repository is trusted (project servers) and an approval bound to the definition hash exists
-// (interactive y/N on a TTY, or `--approve <definitionHash>`). It records the discovered tools in <userDir>/mcp-approvals.json.
+// (never tools/call), after the repository is trusted (project servers) and an approval bound to the definition hash exists.
+// An approval is granted ONLY by an interactive y/N prompt (stdin and stdout both a TTY, no --json). `--approve <hash>` does not
+// grant anything by itself: it is a PIN that must match the definition hash (or, after a tool-list change, the new descriptor
+// hash) and the prompt is still asked. Without a terminal the command exits 6 "approve in a terminal". It refuses (exit 7)
+// when the environment shows an agent context (ASTERWEAVE_RUN_ID, ASTERWEAVE_SESSION_ID, CLAUDECODE, CLAUDE_CODE_*); that check is
+// advisory and the whole mechanism is defence in depth, not a sandbox (see website/docs/cli/policy-and-guards.md).
+// It records the discovered tools in <userDir>/mcp-approvals.json.
 //
 // Exit codes: 0 ok · 1 unavailable server / error · 2 usage · 4 repository not trusted · 5 `validate` found problems
-// (the CLI's configuration-invalid code; 3 is authentication) · 6 approval required · 130 interrupted.
+// (the CLI's configuration-invalid code; 3 is authentication) · 6 approval required · 7 refused (agent environment markers, wrong confirmation) · 130 interrupted.
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { CliError, EXIT, UsageError } from "../exit-codes.mjs";
+import { assertHumanContext } from "../runtime/approvals.mjs";
 import { stringifyJson } from "../json.mjs";
 import { resolveBinary } from "../proc.mjs";
 import { sanitizeForTerminal, sanitizeLines } from "../redact.mjs";
@@ -38,10 +44,10 @@ export const mcpHelpText = `${[
   "  list      servers from .mcp.json, the user Claude file and plugin caches, with trust/approval state; never starts a server",
   "  inspect   one definition: redacted, descriptor hash, what a spawn would run, warnings; never starts a server",
   "  validate  schema, duplicate names, secrets, env values that are not ${cred:NAME} references; exit 5 when problems are found",
-  "  test      the ONLY command that starts a server: initialize + tools/list, never tools/call; needs repository trust and an approval",
+  "  test      the ONLY command that starts a server: initialize + tools/list, never tools/call; needs repository trust and an approval given at a terminal prompt (--approve <hash> only pins what you reviewed)",
   "",
   "Source precedence between project, user and plugin definitions is not verified here: they are listed separately, never merged.",
-  "Exit codes: 0 ok · 1 server unavailable or error · 2 usage · 4 repository not trusted · 5 validate found problems · 6 approval required · 130 interrupted",
+  "Exit codes: 0 ok · 1 server unavailable or error · 2 usage · 4 repository not trusted · 5 validate found problems · 6 approval required · 7 refused (agent environment markers, wrong confirmation) · 130 interrupted",
 ].join("\n")}\n`;
 
 const write = (stream, text) => stream.write(text);
@@ -176,9 +182,7 @@ const hexPrefix = (value) => typeof value === "string" && /^[0-9a-f]{12,64}$/i.t
 const envPlan = (server) => Object.entries(server.env).sort(([a], [b]) => (a < b ? -1 : 1)).map(([key, value]) => `  ${safe(key).slice(0, 60)} <- ${credentialRef(value) === null ? "[literal value: refused]" : value}`);
 
 async function testServer(ctx, name) {
-  if (typeof ctx.env?.ASTERWEAVE_RUN_ID === "string" && ctx.env.ASTERWEAVE_RUN_ID !== "") {
-    throw new CliError("MCP approvals cannot be granted from inside a run.", { code: "APPROVAL_FORBIDDEN_CONTEXT", remediation: "Run `asterweave mcp test` yourself, in a terminal that is not driven by a run." });
-  }
+  assertHumanContext(ctx.env, "MCP approvals");
   const approveFlag = ctx.options?.approve;
   if (approveFlag === true) throw new UsageError("--approve needs the hash shown by `asterweave mcp inspect`.", { remediation: USAGE });
   if (typeof approveFlag === "string" && !hexPrefix(approveFlag)) throw new UsageError("--approve needs at least 12 hex characters of a hash.", { remediation: USAGE });
@@ -207,12 +211,13 @@ async function testServer(ctx, name) {
     "Only initialize and tools/list are sent; no tool is called.",
   ];
 
+  // Only a person at a terminal can approve: stdin and stdout are a TTY and there is no --json. --approve is a pin, never a grant.
+  const canPrompt = isInteractive(ctx) && ctx.options?.json !== true;
   let fresh = false; // approved in THIS invocation for the definition (or no approval was needed)
-  if (typeof approveFlag === "string" && definitionHash.startsWith(approveFlag.toLowerCase())) fresh = !preApproved;
-  else if (!preApproved) {
-    if (typeof approveFlag === "string") throw new UsageError("--approve does not match the definition hash of this server.", { remediation: `Review it with \`asterweave mcp inspect ${safe(server.name).slice(0, 64)}\` and quote at least 12 hex characters of its definition hash.` });
-    if (!(isInteractive(ctx) && ctx.options?.json !== true)) {
-      throw new CliError("Starting this MCP server needs an approval.", { code: "APPROVAL_REQUIRED", exitCode: EXIT.APPROVAL_REQUIRED, remediation: `Review it, then run: asterweave mcp test ${safe(server.name).slice(0, 64)} --approve ${definitionHash.slice(0, 16)}` });
+  if (!preApproved) {
+    if (typeof approveFlag === "string" && !definitionHash.startsWith(approveFlag.toLowerCase())) throw new UsageError("--approve does not match the definition hash of this server.", { remediation: `Review it with \`asterweave mcp inspect ${safe(server.name).slice(0, 64)}\` and quote at least 12 hex characters of its definition hash.` });
+    if (!canPrompt) {
+      throw new CliError("Starting this MCP server needs an approval, and approvals are only given at an interactive terminal prompt.", { code: "APPROVAL_REQUIRED", exitCode: EXIT.APPROVAL_REQUIRED, remediation: `Approve in a terminal (no --json): asterweave mcp test ${safe(server.name).slice(0, 64)} --approve ${definitionHash.slice(0, 16)}` });
     }
     const answer = await confirm(ctx, [...plan, "Start it and approve the tools it lists? [y/N]"]);
     if (answer.interrupted) return EXIT.INTERRUPTED;
@@ -251,11 +256,15 @@ async function testServer(ctx, name) {
   if (changed) {
     // The old token (the definition hash) never re-approves a changed tool list: the NEW full descriptor hash must be quoted.
     const confirmed = typeof approveFlag === "string" && hash.startsWith(approveFlag.toLowerCase());
-    if (!confirmed) {
-      const added = names.filter((n) => !stored.tools.includes(n));
-      const removed = stored.tools.filter((n) => !names.includes(n));
-      throw new CliError(`The tool list, a tool description or a tool schema changed since approval (added: ${added.join(", ") || "none"}; removed: ${removed.join(", ") || "none"}). The approval is stale.`, { code: "APPROVAL_REQUIRED", exitCode: EXIT.APPROVAL_REQUIRED, remediation: `Review the tools, then run: asterweave mcp test ${safe(server.name).slice(0, 64)} --approve ${hash}` });
+    const added = names.filter((n) => !stored.tools.includes(n));
+    const removed = stored.tools.filter((n) => !names.includes(n));
+    const summary = `added: ${added.map((n) => safe(n).slice(0, 80)).join(", ") || "none"}; removed: ${removed.map((n) => safe(n).slice(0, 80)).join(", ") || "none"}`;
+    if (!confirmed || !canPrompt) {
+      throw new CliError(`The tool list, a tool description or a tool schema changed since approval (${summary}). The approval is stale.`, { code: "APPROVAL_REQUIRED", exitCode: EXIT.APPROVAL_REQUIRED, remediation: `Review the tools, then approve in a terminal (no --json): asterweave mcp test ${safe(server.name).slice(0, 64)} --approve ${hash}` });
     }
+    const answer = await confirm(ctx, [`MCP server '${shown.name}' changed since you approved it (${summary}).`, `New tool list: ${names.map((n) => safe(n).slice(0, 80)).join(", ") || "(none)"}`, "Approve the new tool list? [y/N]"]);
+    if (answer.interrupted) return EXIT.INTERRUPTED;
+    if (answer.yes !== true) throw new CliError("Not approved; the stored approval was left as it was.", { code: "APPROVAL_DECLINED", remediation: "Nothing was changed." });
   }
   let approvalResult = "existing";
   if (fresh || changed || stored === null) {

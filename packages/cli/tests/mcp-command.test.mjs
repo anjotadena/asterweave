@@ -12,7 +12,7 @@ import { mcpCommand, mcpCommandMeta } from "../src/commands/mcp.mjs";
 import { spawn as realSpawn } from "node:child_process";
 import { loadMcpServers, redactUrl } from "../src/runtime/tools/mcp-config.mjs";
 import { computeTrustHash, grantTrust } from "../src/trust.mjs";
-import { fakeTerminal } from "./repo-fixture.mjs";
+import { fakeTerminal, waitFor } from "./repo-fixture.mjs";
 
 const FIXTURE = fileURLToPath(new URL("./fixtures/mcp-server.mjs", import.meta.url));
 const temps = [];
@@ -45,7 +45,19 @@ function world({ servers = {}, scenario = {}, userServers, plugin } = {}) {
     return { code, out: out.text(), err: err.text(), json: () => JSON.parse(out.text()) };
   };
   const trust = () => grantTrust(repo, { env });
-  return { repo, userDir, home, env, run, trust, scenarioFile };
+  // Approvals are given only at a terminal prompt: run the command on a fake TTY and answer `key` when the prompt shows
+  // (or return as soon as the command ends without asking). Output comes from the fake terminal.
+  const tty = async (argv, key = "y", extra = {}) => {
+    const terminal = fakeTerminal({ tty: true });
+    const done = run(argv, { ...extra, stdin: terminal.stdin, io: { ...extra.io, stdout: terminal.stdout, stderr: terminal.stderr } });
+    let finished = false;
+    done.then(() => { finished = true; });
+    await waitFor(() => finished || /\[y\/N\]/.test(terminal.text()), { label: "the prompt" });
+    if (!finished) terminal.stdin.write(key);
+    const result = await done;
+    return { code: result.code, out: terminal.text(), err: terminal.errText(), prompted: /\[y\/N\]/.test(terminal.text()) };
+  };
+  return { repo, userDir, home, env, run, tty, trust, scenarioFile };
 }
 
 const good = (scenarioFile) => ({ command: process.execPath, args: [FIXTURE, scenarioFile] });
@@ -148,17 +160,34 @@ test("test: untrusted project => 4; trusted but no approval => 6; wrong or bare 
   assert.match(needs.json().error.remediation, /mcp test files --approve [0-9a-f]{16}/);
   assert.equal((await w.run(["test", "files", "--approve", "0123456789abcdef"], io)).code, 2);
   assert.equal((await w.run(["test", "files", "--approve"], io)).code, 2);
-  assert.equal((await w.run(["test", "files", "--approve", "abcdef123456"], { ...io, env: { ASTERWEAVE_RUN_ID: "run-1" } })).code, 1);
+  assert.equal((await w.run(["test", "files", "--approve", "abcdef123456"], { ...io, env: { ASTERWEAVE_RUN_ID: "run-1" } })).code, 7);
+  for (const marker of [{ ASTERWEAVE_SESSION_ID: "s" }, { CLAUDECODE: "1" }, { CLAUDE_CODE_ENTRYPOINT: "cli" }]) {
+    const refused = await w.tty(["test", "files"], "y", { ...io, env: marker });
+    assert.equal(refused.code, 7, JSON.stringify(marker));
+    assert.equal(refused.prompted, false, "no prompt inside an agent session");
+  }
+  // A forged flag (even the right hash) never grants without a terminal: exit 6, nothing started.
+  const hash = (await w.run(["inspect", "files", "--json"])).json().server.definitionHash;
+  for (const extra of [[], ["--json"]]) {
+    const forged = await w.run(["test", "files", "--approve", hash.slice(0, 16), ...extra], io);
+    assert.equal(forged.code, 6, forged.err + forged.out);
+    assert.match(forged.err + forged.out, /Approve in a terminal/);
+  }
+  assert.equal((await w.run(["list", "--json"])).json().servers[0].approval, "none");
 });
 
 test("test with a bound --approve starts the fixture, lists tools (never calls), records the approval; later runs need no flag", async () => {
   const w = world({ servers: { files: good } });
   w.trust();
   const hash = (await w.run(["inspect", "files", "--json"])).json().server.definitionHash;
-  const first = await w.run(["test", "files", "--approve", hash.slice(0, 16), "--json"]);
+  const first = await w.tty(["test", "files", "--approve", hash.slice(0, 16)]);
   assert.equal(first.code, 0, first.err || first.out);
-  const body = first.json();
-  assert.equal(body.approval, "recorded");
+  assert.equal(first.prompted, true, "the prompt is still asked: --approve is a pin, not a grant");
+  assert.match(first.out, /approval: recorded/);
+  const again = await w.run(["test", "files", "--json"]);
+  assert.equal(again.code, 0);
+  const body = again.json();
+  assert.equal(body.approval, "existing");
   assert.deepEqual(body.tools.map((t) => t.name), ["echo"]);
   assert.equal(body.serverInfo.name, "fixture");
   assert.equal(body.protocolVersion, "2025-06-18");
@@ -172,16 +201,13 @@ test("test with a bound --approve starts the fixture, lists tools (never calls),
   assert.equal(list.approval, "valid");
   assert.equal(list.trust, "trusted");
 
-  const again = await w.run(["test", "files", "--json"]);
-  assert.equal(again.code, 0);
-  assert.equal(again.json().approval, "existing");
 });
 
 test("test: a changed tool list after approval is reported as stale (exit 6) and is only stored when approved again", async () => {
   const w = world({ servers: { files: good } });
   w.trust();
   const hash = (await w.run(["inspect", "files", "--json"])).json().server.definitionHash;
-  assert.equal((await w.run(["test", "files", "--approve", hash.slice(0, 16)])).code, 0);
+  assert.equal((await w.tty(["test", "files", "--approve", hash.slice(0, 16)])).code, 0);
   writeFileSync(w.scenarioFile, JSON.stringify({ tools: [{ name: "echo" }, { name: "exfiltrate" }] }));
   const stale = await w.run(["test", "files", "--json"]);
   assert.equal(stale.code, 6);
@@ -192,9 +218,17 @@ test("test: a changed tool list after approval is reported as stale (exit 6) and
   const newHash = /--approve ([0-9a-f]{64})/.exec(stale.json().error.remediation)?.[1];
   assert.ok(newHash, "the remediation prints the new full descriptor hash");
   assert.notEqual(newHash, hash);
-  assert.equal((await w.run(["test", "files", "--approve", hash.slice(0, 16)])).code, 6, "the old token is refused");
+  const oldToken = await w.tty(["test", "files", "--approve", hash.slice(0, 16)]);
+  assert.equal(oldToken.code, 6, "the old token is refused");
+  assert.equal(oldToken.prompted, false);
   assert.deepEqual(Object.values(store().approvals)[0]["project/files"].tools, ["echo"]);
-  assert.equal((await w.run(["test", "files", "--approve", newHash.slice(0, 16)])).code, 0);
+  assert.equal((await w.run(["test", "files", "--approve", newHash.slice(0, 16)])).code, 6, "the new token alone (no terminal) does not grant");
+  // At a terminal the prompt names the change; declining leaves the stored approval alone, accepting records it.
+  const declined = await w.tty(["test", "files", "--approve", newHash.slice(0, 16)], "n");
+  assert.equal(declined.code, 1);
+  assert.match(declined.out, /added: exfiltrate; removed: none/);
+  assert.deepEqual(Object.values(store().approvals)[0]["project/files"].tools, ["echo"]);
+  assert.equal((await w.tty(["test", "files", "--approve", newHash.slice(0, 16)])).code, 0);
   assert.deepEqual(Object.values(store().approvals)[0]["project/files"].tools, ["echo", "exfiltrate"]);
 });
 
@@ -202,37 +236,32 @@ test("test: unavailable servers are exit 1 with a remediation, not a stack trace
   const missing = world({ servers: { gone: { command: join(tmpdir(), process.platform === "win32" ? "nope-xyz.exe" : "nope-xyz") } } });
   missing.trust();
   const h = (await missing.run(["inspect", "gone", "--json"])).json().server.definitionHash;
-  const r = await missing.run(["test", "gone", "--approve", h.slice(0, 16), "--json"]);
+  const r = await missing.tty(["test", "gone", "--approve", h.slice(0, 16)]);
   assert.equal(r.code, 1);
-  assert.equal(r.json().error.code, "MCP_COMMAND_MISSING");
+  assert.match(r.err, /not found on PATH/);
 
   const old = world({ servers: { files: good }, scenario: { protocolVersion: "1999-01-01" } });
   old.trust();
   const oh = (await old.run(["inspect", "files", "--json"])).json().server.definitionHash;
-  const v = await old.run(["test", "files", "--approve", oh.slice(0, 16), "--json"]);
+  const v = await old.tty(["test", "files", "--approve", oh.slice(0, 16)]);
   assert.equal(v.code, 1);
-  assert.equal(v.json().error.code, "MCP_VERSION_UNSUPPORTED");
-  assert.match(v.json().error.remediation, /Update the server/);
+  assert.match(v.err, /Update the server/);
 
   const cred = world({ servers: { c: (s) => ({ command: process.execPath, args: [FIXTURE, s], env: { API_KEY: "${cred:NOT_SET_ANYWHERE}" } }), lit: (s) => ({ command: process.execPath, args: [FIXTURE, s], env: { PLAIN: "x" } }) } });
   cred.trust();
   const ch = (await cred.run(["inspect", "c", "--json"])).json().server.definitionHash;
-  assert.equal((await cred.run(["test", "c", "--approve", ch.slice(0, 16), "--json"])).json().error.code, "MCP_CREDENTIAL_MISSING");
+  assert.match((await cred.tty(["test", "c", "--approve", ch.slice(0, 16)])).err, /No value for the credential/);
   const lh = (await cred.run(["inspect", "lit", "--json"])).json().server.definitionHash;
-  assert.equal((await cred.run(["test", "lit", "--approve", lh.slice(0, 16), "--json"])).json().error.code, "MCP_ENV_LITERAL");
+  assert.match((await cred.tty(["test", "lit", "--approve", lh.slice(0, 16)])).err, /not a credential reference/);
 });
 
 test("test on a TTY asks y/N; declining starts nothing, accepting records the approval", async () => {
   for (const [key, expected] of [["n", 1], ["y", 0]]) {
     const w = world({ servers: { files: good } });
     w.trust();
-    const terminal = fakeTerminal({ tty: true });
-    const done = w.run(["test", "files"], { stdin: terminal.stdin, io: { stdout: terminal.stdout, stderr: terminal.stderr } });
-    // runCli takes stdout from io.stdout of the call below; so drive the keys after a tick.
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    terminal.stdin.write(key);
-    const result = await done;
+    const result = await w.tty(["test", "files"], key);
     assert.equal(result.code, expected, `${key}: ${result.err}`);
+    assert.equal((await w.run(["list", "--json"])).json().servers[0].approval, key === "y" ? "valid" : "none");
   }
 });
 
@@ -244,7 +273,7 @@ test("swapping the credential reference after approval makes the approval stale 
   const env = { MY_API_KEY: "intended", OTHER_SECRET: "other-host-secret" };
   const first = (await w.run(["inspect", "files", "--json"], { env })).json().server;
   assert.deepEqual(first.spawn.envRefs, { API_KEY: "MY_API_KEY" });
-  assert.equal((await w.run(["test", "files", "--approve", first.definitionHash.slice(0, 16)], { env })).code, 0);
+  assert.equal((await w.tty(["test", "files", "--approve", first.definitionHash.slice(0, 16)], "y", { env })).code, 0);
   // Re-point the same key at another credential (the file changes, so the user re-grants trust; approval is separate).
   writeFileSync(join(w.repo, ".mcp.json"), JSON.stringify({ mcpServers: { files: { command: process.execPath, args: [FIXTURE, w.scenarioFile], env: { API_KEY: "${cred:OTHER_SECRET}" } } } }));
   w.trust();
@@ -262,9 +291,9 @@ test("approvals are keyed by source: same-named servers do not overwrite each ot
   const w = world({ servers: { same: good }, userServers: { same: { command: process.execPath, args: [FIXTURE, "x"] } } });
   w.trust();
   const proj = (await w.run(["inspect", "same", "--source", "project", "--json"])).json().server.definitionHash;
-  assert.equal((await w.run(["test", "same", "--source", "project", "--approve", proj.slice(0, 16)])).code, 0);
+  assert.equal((await w.tty(["test", "same", "--source", "project", "--approve", proj.slice(0, 16)])).code, 0);
   const user = (await w.run(["inspect", "same", "--source", "user", "--json"])).json().server.definitionHash;
-  assert.equal((await w.run(["test", "same", "--source", "user", "--approve", user.slice(0, 16)])).code, 0);
+  assert.equal((await w.tty(["test", "same", "--source", "user", "--approve", user.slice(0, 16)])).code, 0);
   const keys = Object.keys(Object.values(JSON.parse(readFileSync(join(w.userDir, "mcp-approvals.json"), "utf8")).approvals)[0]).sort();
   assert.deepEqual(keys, ["project/same", "user/same"]);
   const listed = (await w.run(["list", "--json"])).json().servers;
@@ -275,7 +304,7 @@ test("user-level servers run in a neutral temporary directory, not the repositor
   const w = world({ userServers: { mine: { command: process.execPath, args: [FIXTURE, "x"] } } });
   const hash = (await w.run(["inspect", "mine", "--json"])).json().server.definitionHash;
   const cwds = [];
-  const result = await w.run(["test", "mine", "--approve", hash.slice(0, 16), "--json"], { io: { spawn: (cmd, args, options) => { cwds.push(options.cwd); return realSpawn(cmd, args, options); } } });
+  const result = await w.tty(["test", "mine", "--approve", hash.slice(0, 16)], "y", { io: { spawn: (cmd, args, options) => { cwds.push(options.cwd); return realSpawn(cmd, args, options); } } });
   assert.equal(result.code, 0, result.err || result.out);
   assert.equal(cwds.length, 1);
   assert.ok(!cwds[0].startsWith(w.repo));

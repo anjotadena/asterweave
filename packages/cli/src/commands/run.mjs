@@ -1,24 +1,30 @@
-// `asterweave run show|approve|abort` and the hidden development subcommands `run start|resume`.
+// `asterweave run start|resume|show|approve|abort`. start and resume drive a run with the Claude runner (run-runner.mjs); the scripted fake
+// executor behind them is the only development-gated part.
 //
 // PUBLIC (listed in help):
 //   run show [runId] [--json]                                   what a run is doing (default: the newest run of this repository)
-//   run approve <runId> --approval <id> --subject <hash> [--json]   record an approval (flags), or answer y/N on a terminal
+//   run approve <runId> [--approval <id> --subject <hash> --nonce <code>] [--json]   answer y/N on a terminal, or quote the nonce
 //   run abort <runId> [--yes] [--json]                          stop a run for good (idempotent)
 //
-// HIDDEN (accepted only when ASTERWEAVE_DEV_EXECUTORS=1, otherwise exit 2 "not available"):
-//   run start  --executor fake --script <file> [--graph delivery@1|bugfix@1] [--goal text] [--run-id id]
+//   run start <goal> [--workflow delivery|bugfix] [--session id] [--runner claude|fake] [--worktree name] [--json]   (Claude runner: runner.md)
+//   run resume <runId> [--json]
+//
+// DEVELOPMENT ONLY (accepted only when ASTERWEAVE_DEV_EXECUTORS=1, otherwise exit 2 "not available"): the scripted fake executor
+//   run start  --executor fake --script <file> [--graph delivery@1|bugfix@1] [--goal text] [--run-id id]   (or --runner fake --script f <goal>)
 //   run resume <runId> --executor fake --script <file>
 // They drive the loop with the scripted fake executor and a SIMULATED tool dispatcher: no tool is carried out (hooks
 // and the read-only git queries of resolveRepo do spawn processes). `resume` takes the script again because the
 // ledger does not store it.
 //
-// Approvals come only from a person: the TTY prompt or the explicit flags (`--approval` + `--subject`, the
-// hash prefix that `run show` prints). Nothing is ever read from a file in the repository, and the command
-// refuses to run when ASTERWEAVE_RUN_ID is set (it would be a process inside a run granting itself approval).
-// THAT REFUSAL IS ADVISORY: a child process can unset the variable. It is acceptable only because Phase B carries
-// out simulated tools; a real dispatcher MUST NOT ship before approvals have a non-forgeable path (a per-request
-// nonce shown only on an interactive terminal with only its hash stored, or terminal-only grants) and OS-level
-// isolation. As a cheap hardening, `run show` hides the approval subject hashes when ASTERWEAVE_RUN_ID is set.
+// Approvals come only from a person at a terminal: the y/N prompt (stdin AND stdout are a TTY), or the flags
+// `--approval` + `--subject` (the hash prefix `run show` prints) + `--nonce`, the one-time code that the SUPERVISING
+// process (`run start|resume`) printed on its OWN stderr when that was a TTY; only the nonce's hash is stored. Flags without a
+// valid nonce never grant (exit 2 without one, exit 7 with a wrong one; 5 wrong tries lock the request for 10 minutes).
+// Nothing is ever read from a file in the repository. The command also refuses to run (exit 7) when the environment
+// shows an agent context (ASTERWEAVE_RUN_ID, ASTERWEAVE_SESSION_ID, CLAUDECODE, CLAUDE_CODE_*). Those markers are
+// advisory (a child can unset them) and the nonce can be seen by a process that reaches the console; this is defence
+// in depth, NOT a sandbox: see approvals.mjs and website/docs/cli/policy-and-guards.md. As a cheap hardening, `run show`
+// hides the approval subject hashes when ASTERWEAVE_RUN_ID is set.
 // Every write takes the per-run lock; a person is prompted BEFORE the lock is taken (no heartbeat is running
 // while a human thinks) and the grant is bound to the subject that was shown. Several approvals are granted
 // all-or-nothing: all are validated first, then written.
@@ -32,7 +38,7 @@ import { runBinary } from "../proc.mjs";
 import { sanitizeForTerminal, sanitizeLines } from "../redact.mjs";
 import { gitEnv } from "../repo.mjs";
 import { resolveUserDir } from "../paths.mjs";
-import { DISPLAY_LIMIT, displayProblem, displayTarget, findApproval, grantApproval, isValid, pendingApprovals } from "../runtime/approvals.mjs";
+import { DISPLAY_LIMIT, assertHumanContext, displayProblem, displayTarget, failedAttemptEvent, findApproval, grantApproval, isValid, pendingApprovals } from "../runtime/approvals.mjs";
 import { simulatedDispatcher } from "../runtime/executor.mjs";
 import { createFakeExecutor, loadScript } from "../runtime/fake-executor.mjs";
 import { GraphError, getGraph, graphHash } from "../runtime/graph.mjs";
@@ -47,16 +53,17 @@ import { resolveModelConfig } from "../config.mjs";
 import { worktreeRootProblem } from "../runtime/repo-root.mjs";
 import { askYesNo, withTerminal } from "../tui/session.mjs";
 import { createTerminal } from "../tui/terminal.mjs";
+import { resumeClaudeRun, startClaudeRun } from "./run-runner.mjs";
 import { isInteractive, seams, stringOption } from "./shared.mjs";
 
 export const runCommandMeta = Object.freeze({
-  summary: "Show, approve or abort a run",
+  summary: "Start, resume, show, approve or abort a run",
   boolean: ["json", "yes"],
   // The union over every subcommand (including the hidden ones); each subcommand narrows it below.
-  options: ["json", "yes", "approval", "subject", "executor", "script", "graph", "goal", "run-id"],
+  options: ["json", "yes", "approval", "subject", "nonce", "executor", "script", "graph", "goal", "run-id", "workflow", "session", "runner", "worktree"],
 });
 
-const PUBLIC_USAGE = "Usage: asterweave run show [runId] [--json] | run approve <runId> --approval <id> --subject <hash> | run abort <runId> [--yes]";
+const PUBLIC_USAGE = "Usage: asterweave run start <goal> [--workflow delivery|bugfix] [--session <id>] [--worktree <name>] | run resume <runId> | run show [runId] [--json] | run approve <runId> [--approval <id> --subject <hash> --nonce <code>] | run abort <runId> [--yes]";
 const SUBJECT_SHOWN = 12;
 const GOAL_LINE = 400;
 const HIDDEN_SUBJECT = "hidden inside a run";
@@ -65,12 +72,12 @@ const DEV_ENV = "ASTERWEAVE_DEV_EXECUTORS";
 
 const FLAGS = {
   show: ["json"],
-  approve: ["json", "approval", "subject"],
+  approve: ["json", "approval", "subject", "nonce"],
   abort: ["json", "yes"],
-  start: ["json", "executor", "script", "graph", "goal", "run-id"],
-  resume: ["json", "executor", "script"],
+  start: ["json", "executor", "script", "graph", "goal", "run-id", "workflow", "session", "runner", "worktree"],
+  resume: ["json", "executor", "script", "runner"],
 };
-const HIDDEN = new Set(["start", "resume"]);
+// start and resume are public with the Claude runner; only the scripted fake executor behind them is development only (wantsFake).
 
 const write = (stream, text) => stream.write(text);
 const isoNow = () => new Date().toISOString();
@@ -375,8 +382,9 @@ export function formatRun(view) {
   }
   const pending = view.approvals.filter((approval) => approval.state === "pending" && approval.displayable && approval.subject !== HIDDEN_SUBJECT);
   if (pending.length > 0) {
-    lines.push("", "Approve with:");
-    for (const approval of pending) lines.push(`  asterweave run approve ${view.runId} --approval ${approval.id} --subject ${approval.subject}`);
+    lines.push("", "Approve in a terminal (answer the prompt):", `  asterweave run approve ${view.runId}`);
+    lines.push("Or with flags, quoting the one-time nonce the supervising terminal printed:");
+    for (const approval of pending) lines.push(`  asterweave run approve ${view.runId} --approval ${approval.id} --subject ${approval.subject} --nonce <nonce>`);
   }
   return lines;
 }
@@ -426,24 +434,28 @@ function assertRunOpen(run, what) {
 // run approve
 // ---------------------------------------------------------------------------------------------
 
-const approveRemediation = "Usage: asterweave run approve <runId> --approval <id> --subject <hash prefix from `run show`>";
+const approveRemediation = "Approve in a terminal: asterweave run approve <runId>. With flags: --approval <id> --subject <hash prefix from `run show`> --nonce <code printed by the supervising terminal>";
 
 async function approveRun(ctx, rest) {
-  if (typeof ctx.env?.ASTERWEAVE_RUN_ID === "string" && ctx.env.ASTERWEAVE_RUN_ID !== "") {
-    throw new CliError("Approvals cannot be granted from inside a run.", { code: "APPROVAL_FORBIDDEN_CONTEXT", exitCode: EXIT.ERROR, remediation: "Run `asterweave run approve` yourself, in a terminal that is not driven by the run." });
-  }
+  assertHumanContext(ctx.env);
   const [runId, ...extra] = rest;
   if (runId === undefined) throw new UsageError("run approve needs a run id.", { remediation: approveRemediation });
   if (extra.length > 0) throw new UsageError(`Unexpected argument '${sanitizeForTerminal(extra[0]).slice(0, 40)}'.`, { remediation: approveRemediation });
   const approvalId = stringOption(ctx, "approval", approveRemediation);
   const subject = stringOption(ctx, "subject", approveRemediation);
+  const nonce = stringOption(ctx, "nonce", approveRemediation);
   const json = ctx.options?.json === true;
   if ((approvalId === undefined) !== (subject === undefined)) {
     throw new UsageError("--approval and --subject go together: quote the subject hash prefix that `run show` prints.", { remediation: approveRemediation });
   }
   const viaFlags = approvalId !== undefined;
+  if (!viaFlags && nonce !== undefined) throw new UsageError("--nonce goes with --approval and --subject.", { remediation: approveRemediation });
+  if (viaFlags && nonce === undefined) {
+    // Flags alone never grant: anything that can run this command with flags could be an agent.
+    throw new CliError("Flags alone cannot approve: a flag approval needs the one-time --nonce that the supervising process printed on its own terminal.", { code: "APPROVAL_TERMINAL_REQUIRED", exitCode: EXIT.USAGE, remediation: approveRemediation });
+  }
   if (!viaFlags && (json || !isInteractive(ctx))) {
-    throw new UsageError("run approve needs --approval and --subject when it is not run in an interactive terminal (or with --json).", { remediation: approveRemediation });
+    throw new CliError("run approve needs an interactive terminal (stdin and stdout both a TTY, no --json) unless --approval, --subject and --nonce are given.", { code: "APPROVAL_TERMINAL_REQUIRED", exitCode: EXIT.USAGE, remediation: approveRemediation });
   }
 
   const repo = await resolveRepo(ctx);
@@ -498,7 +510,17 @@ async function approveRun(ctx, rest) {
       if (item.subjectHash !== null && (!before || before.subjectHash !== item.subjectHash || before.grantedAt !== null || before.invalidatedAt !== null)) {
         throw new CliError(`Approval ${sanitizeForTerminal(String(item.id)).slice(0, 40)} changed while you were deciding; nothing was granted.`, { code: "APPROVAL_CHANGED", exitCode: EXIT.ERROR, remediation: "Run `asterweave run show` and decide again." });
       }
-      const result = grantApproval(current, item.id, { by: { source, name }, now: isoNow(), policyHash, ...(source === "flag" ? { subject } : {}), env: ctx.env });
+      let result;
+      try {
+        result = grantApproval(current, item.id, { by: { source, name }, now: isoNow(), policyHash, ...(source === "flag" ? { subject, nonce } : {}), env: ctx.env });
+      } catch (error) {
+        // A wrong nonce is counted in the request record (ledger event) BEFORE the error is reported; 5 lock it for 10 minutes.
+        if (error?.code === "APPROVAL_NONCE_INVALID") {
+          const target = findApproval(current, item.id);
+          if (target) commitRecords(env, run, [failedAttemptEvent(target, isoNow())]);
+        }
+        throw error;
+      }
       current = result.run;
       events.push(...result.events);
     }
@@ -586,6 +608,7 @@ function summarize(result, run, hide = false) {
     exitCode: result.exitCode,
     reason: result.reason ?? null,
     decision: result.decision ? { point: result.decision.point, decision: result.decision.decision, reason: result.decision.reason, ruleId: result.decision.ruleId, message: clip(result.decision.message ?? "", 500) } : null,
+    runnerFailure: result.runnerFailure ?? null,
     pendingApprovals: result.pendingApprovals.map((approval) => ({ id: approval.id, kind: approval.kind, scope: { operation: approval.scope.operation, target: clip(approval.scope.target, DISPLAY_LIMIT) }, subject: hide ? HIDDEN_SUBJECT : prefix(approval.subjectHash), requestedBy: approval.requestedBy ?? null })),
   };
 }
@@ -597,6 +620,7 @@ function report(ctx, summary) {
   }
   const lines = [`Run ${summary.runId} (${summary.graph}): ${summary.status}${summary.currentNode ? ` at ${summary.currentNode}` : ""}`];
   if (summary.reason) lines.push(`Stopped: ${summary.reason}${summary.decision?.message ? ` - ${summary.decision.message.replace(/\s+/g, " ")}` : ""}`);
+  if (summary.runnerFailure) lines.push(`Runner: ${summary.runnerFailure.class} - ${summary.runnerFailure.message}`, `Next: ${summary.runnerFailure.remediation}`);
   for (const approval of summary.pendingApprovals) lines.push(`Waiting for approval ${approval.id}: ${approval.kind} ${approval.scope.operation} (subject ${approval.subject})`);
   if (summary.exitCode !== EXIT.OK) lines.push(`See: asterweave run show ${summary.runId}`);
   write(ctx.stdout, `${sanitizeLines(lines)}\n`);
@@ -625,7 +649,20 @@ function interruptSignal(ctx) {
   };
 }
 
-async function drive(ctx, { loop, loopOptions, dir, graph, executor, policy, hooks, repo, branch, run }) {
+/**
+ * The supervisor's own terminal is the ONLY place a nonce is shown: stderr, and only when it is a TTY. Headless supervisors
+ * get no callback, so no nonce exists anywhere for them (their approvals need the interactive prompt).
+ */
+function nonceAnnouncer(ctx) {
+  if (ctx.stderr?.isTTY !== true) return {};
+  return {
+    onApprovalNonce({ runId, approvalId, kind, nonce }) {
+      write(ctx.stderr, `${sanitizeLines([`Approval ${approvalId} (${kind}) of run ${runId} is waiting. One-time nonce: ${nonce}`, "Keep it to yourself; it is shown only here. Without it, answer the prompt of `asterweave run approve` in a terminal."])}\n`);
+    },
+  };
+}
+
+async function drive(ctx, { loop, loopOptions, dir, graph, executor, policy, hooks, repo, branch, run, finish }) {
   const interrupt = interruptSignal(ctx);
   try {
     const result = await loop({
@@ -642,9 +679,13 @@ async function drive(ctx, { loop, loopOptions, dir, graph, executor, policy, hoo
       ...(branch ? { branch } : {}),
       guardOptions: { env: ctx.env, userDir: resolveUserDir(seams(ctx)), ...(ctx.platform ? { platform: ctx.platform } : {}), ...(ctx.homedir ? { homedir: ctx.homedir } : {}) },
       hookOptions: { env: ctx.env },
+      ...nonceAnnouncer(ctx),
       ...fsOption(ctx),
       ...loopOptions,
     });
+    // An interrupted claude turn is fully gone (process tree killed) before the command returns; an executor that never settles cannot hang it.
+    await Promise.race([executor.idle?.(), new Promise((resolve) => { setTimeout(resolve, 10_000).unref?.(); })]);
+    try { finish?.(result); } catch { /* a convenience record must not change the outcome */ }
     const summary = summarize(result, run ?? result.run, insideRun(ctx));
     report(ctx, summary);
     return result.exitCode;
@@ -653,8 +694,23 @@ async function drive(ctx, { loop, loopOptions, dir, graph, executor, policy, hoo
   }
 }
 
+/** The scripted fake executor is wanted: --executor / --script, or --runner fake. It needs ASTERWEAVE_DEV_EXECUTORS=1. */
+function wantsFake(ctx) {
+  const runner = ctx.options?.runner;
+  if (runner !== undefined && runner !== "claude" && runner !== "fake") throw new UsageError("--runner must be claude or fake.", { remediation: PUBLIC_USAGE });
+  return ctx.options?.executor !== undefined || ctx.options?.script !== undefined || runner === "fake";
+}
+
+const KIT = () => ({ resolveRepo, currentBranch, drive, graphOf, fsOption, newRunId, GOAL_MAX });
+
 async function startRun(ctx, rest, deps) {
-  const remediation = "Usage: asterweave run start --executor fake --script <file> [--graph delivery@1|bugfix@1] [--goal text] [--run-id id]";
+  if (!wantsFake(ctx)) return startClaudeRun(ctx, rest, deps, KIT());
+  if (ctx.env?.[DEV_ENV] !== "1") throw notAvailable("start");
+  if (ctx.options?.runner === "fake" && ctx.options?.executor === undefined && rest.length === 1 && ctx.options?.goal === undefined) {
+    ctx = { ...ctx, options: { ...ctx.options, goal: rest[0] } }; // `run start <goal> --runner fake --script f`
+    rest = [];
+  }
+  const remediation = "Usage: asterweave run start <goal> [--workflow delivery|bugfix] [--session <id>] [--worktree <name>] [--json]";
   if (rest.length > 0) throw new UsageError(`Unexpected argument '${sanitizeForTerminal(rest[0]).slice(0, 40)}'.`, { remediation });
   const executor = requireFake(ctx, remediation);
   const graphName = stringOption(ctx, "graph", remediation) ?? "delivery@1";
@@ -676,6 +732,8 @@ async function startRun(ctx, rest, deps) {
 }
 
 async function resumeRun(ctx, rest, deps) {
+  if (!wantsFake(ctx)) return resumeClaudeRun(ctx, rest, deps, KIT());
+  if (ctx.env?.[DEV_ENV] !== "1") throw notAvailable("resume");
   const remediation = "Usage: asterweave run resume <runId> --executor fake --script <file>";
   const [runId, ...extra] = rest;
   if (runId === undefined) throw new UsageError("run resume needs a run id.", { remediation });
@@ -696,18 +754,18 @@ async function resumeRun(ctx, rest, deps) {
 // ---------------------------------------------------------------------------------------------
 
 /**
- * Handler factory. `runLoopImpl` and `loopOptions` are test seams (a different loop, a fast sleep, ...).
+ * Handler factory. `runLoopImpl`, `loopOptions`, `claude` (claudePath, claudeArgs, spawn, exists), `runTurn` and `runnerOptions` are test seams.
  * @param {{runLoopImpl?: typeof runLoop, loopOptions?: object}} [seamsIn]
  */
-export function createRunCommand({ runLoopImpl = runLoop, loopOptions = {} } = {}) {
+export function createRunCommand({ runLoopImpl = runLoop, loopOptions = {}, claude, runTurn, runnerOptions } = {}) {
+  const runner = { ...(claude ? { claude } : {}), ...(runTurn ? { runTurn } : {}), ...(runnerOptions ? { runnerOptions } : {}) };
   return async function run(ctx) {
     const [sub, ...rest] = ctx.positionals ?? [];
     if (sub === undefined) throw new UsageError("Missing run subcommand.", { remediation: PUBLIC_USAGE });
     if (!Object.hasOwn(FLAGS, sub)) throw new UsageError(`Unknown run subcommand '${sanitizeForTerminal(sub).slice(0, 40)}'.`, { remediation: PUBLIC_USAGE });
-    if (HIDDEN.has(sub) && ctx.env?.[DEV_ENV] !== "1") throw notAvailable(sub);
     for (const key of Object.keys(ctx.options ?? {})) {
       if (key !== "help" && key !== "version" && !FLAGS[sub].includes(key)) {
-        throw new UsageError(`Option '--${sanitizeForTerminal(key).slice(0, 40)}' is not valid for 'run ${sub}'.`, { remediation: HIDDEN.has(sub) ? PUBLIC_USAGE : `Run \`asterweave help run\` to see the accepted options.` });
+        throw new UsageError(`Option '--${sanitizeForTerminal(key).slice(0, 40)}' is not valid for 'run ${sub}'.`, { remediation: `Run \`asterweave help run\` to see the accepted options.` });
       }
     }
     switch (sub) {
@@ -718,9 +776,9 @@ export function createRunCommand({ runLoopImpl = runLoop, loopOptions = {} } = {
       case "abort":
         return abortRun(ctx, rest);
       case "start":
-        return startRun(ctx, rest, { loop: runLoopImpl, loopOptions });
+        return startRun(ctx, rest, { loop: runLoopImpl, loopOptions, ...runner });
       default:
-        return resumeRun(ctx, rest, { loop: runLoopImpl, loopOptions });
+        return resumeRun(ctx, rest, { loop: runLoopImpl, loopOptions, ...runner });
     }
   };
 }
