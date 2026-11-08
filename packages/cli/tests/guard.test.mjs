@@ -479,3 +479,21 @@ test("classifyShell exposes findings, operations and whether the command mutates
   assert.equal(classifyShell("echo hi > out.txt", options).mutating, true);
   assert.deepEqual(classifyShell("git reset --hard", options).findings.map((finding) => finding.ruleId), ["git-reset-hard", "not-allow-listed"], "the floor plus the allow-list miss");
 });
+
+test("approval self-grant: a --nonce on run approve / mcp test --approve stays a self-grant, whatever the flag order or spelling", () => {
+  const nonce = "0123456789abcdef-0123456789abcdef-0123456789abcdef-0123456789abcdef".slice(0, 35);
+  for (const command of [
+    `asterweave run approve r1 --approval ap-1 --subject abcdef123456 --nonce ${nonce}`,
+    `asterweave run approve r1 --nonce=${nonce} --approval ap-1 --subject abcdef123456`,
+    `asterweave --json run approve r1 --nonce ${nonce}`,
+    `node packages/cli/bin/asterweave.mjs run approve r1 --approval ap-1 --subject abcdef123456 --nonce ${nonce} --json`,
+    `bash -c 'asterweave run approve r1 --nonce ${nonce}'`,
+    `asterweave mcp test files --approve abcdef123456 --nonce ${nonce}`,
+    `asterweave mcp test files --nonce ${nonce} --approve=abcdef123456`,
+  ]) {
+    const decision = shell(command);
+    assert.equal(decision.decision, "deny", command);
+    assert.equal(decision.reason, "APPROVAL_SELF_GRANT", command);
+  }
+  assert.notEqual(shell("asterweave mcp test files --nonce abc").reason, "APPROVAL_SELF_GRANT", "no --approve, no grant (the flag is not valid there anyway)");
+});

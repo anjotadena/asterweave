@@ -10,7 +10,9 @@ import { join } from "node:path";
 import test, { after } from "node:test";
 import { fileURLToPath } from "node:url";
 import { runCli } from "../src/cli.mjs";
-import { attempt, deliveryGraph, script, tool } from "./loop-fixture.mjs";
+import { grantApproval } from "../src/runtime/approvals.mjs";
+import { loadRun } from "../src/runtime/ledger.mjs";
+import { attempt, deliveryGraph, grantPending, script, tool } from "./loop-fixture.mjs";
 import { cleanupTemp, git, tempDir, waitFor } from "./repo-fixture.mjs";
 
 const bin = fileURLToPath(new URL("../bin/asterweave.mjs", import.meta.url));
@@ -100,13 +102,13 @@ const common = (box, file) => ["--executor", "fake", "--script", file];
 const start = (box, runId, file) => cli(box, ["run", "start", ...common(box, file), "--run-id", runId, "--json"]);
 const resume = (box, runId, file) => cli(box, ["run", "resume", runId, ...common(box, file), "--json"]);
 
+// A headless child prints no nonce, so approvals cannot come through the CLI flags here (the CLI paths are covered in
+// run-command.test.mjs). The test plays the person at the terminal: the library with the tty source, under the run lock.
 function approveAll(box, runId) {
   const pending = show(box, runId).approvals.filter((approval) => approval.state === "pending");
   assert.ok(pending.length > 0, "something is waiting for approval");
-  for (const approval of pending) {
-    const result = cli(box, ["run", "approve", runId, "--approval", approval.id, "--subject", approval.subject, "--json"]);
-    assert.equal(result.code, 0, result.err + result.out);
-  }
+  const granted = grantPending({ now: () => new Date().toISOString() }, findRunDir(box, runId), graph);
+  assert.deepEqual(granted, pending.map((approval) => approval.id));
   return pending;
 }
 
@@ -221,14 +223,16 @@ test("e2e 4: a headless merge waits (exit 6); a wrong subject grants nothing; th
   assert.equal(pending[0].scope.operation, "merge");
   assert.match(pending[0].subject, /^[0-9a-f]{12}$/);
 
-  const wrong = cli(box, ["run", "approve", "m1", "--approval", pending[0].id, "--subject", "ffffffffffff", "--json"]);
-  assert.equal(wrong.code, 2);
-  assert.equal(parse(wrong).error.code, "APPROVAL_SUBJECT_MISMATCH");
+  const forged = cli(box, ["run", "approve", "m1", "--approval", pending[0].id, "--subject", pending[0].subject, "--json"]);
+  assert.equal(forged.code, 2, "flags without the nonce never grant");
+  assert.equal(parse(forged).error.code, "APPROVAL_TERMINAL_REQUIRED");
+  const guessed = cli(box, ["run", "approve", "m1", "--approval", pending[0].id, "--subject", pending[0].subject, "--nonce", "00000000-00000000-00000000-00000000", "--json"]);
+  assert.equal(guessed.code, 2, "a headless supervisor stores no nonce hash, so a quoted nonce is still terminal-only (APPROVAL_TERMINAL_REQUIRED)");
+  assert.equal(parse(guessed).error.code, "APPROVAL_TERMINAL_REQUIRED");
   assert.equal(show(box, "m1").approvals.find((approval) => approval.id === pending[0].id).state, "pending");
   assert.equal(resume(box, "m1", file).code, 6, "still waiting");
 
-  const right = cli(box, ["run", "approve", "m1", "--approval", pending[0].id, "--subject", pending[0].subject, "--json"]);
-  assert.equal(right.code, 0, right.err + right.out);
+  assert.deepEqual(grantPending({ now: () => new Date().toISOString() }, findRunDir(box, "m1"), graph), [pending[0].id]);
   const done = drive(box, "m1", file);
   assert.equal(done.code, 0, done.err + done.out);
   const events = eventsOf(box, "m1");
@@ -260,9 +264,7 @@ test("e2e 5: a new plan revision invalidates the approval and puts the run back 
   assert.ok(eventsOf(box, "p1").some((event) => event.type === "approval.invalidated" && event.approvalId === run.approvals[0].id));
   assert.notEqual(run.approvals[0].subject, run.approvals[1].subject);
   // The old approval cannot be granted any more.
-  const stale = cli(box, ["run", "approve", "p1", "--approval", run.approvals[0].id, "--subject", run.approvals[0].subject, "--json"]);
-  assert.equal(stale.code, 1);
-  assert.equal(parse(stale).error.code, "APPROVAL_INVALIDATED");
+  assert.throws(() => grantApproval(loadRun(findRunDir(box, "p1")).run, run.approvals[0].id, { by: { source: "tty", name: "tester" }, now: new Date().toISOString(), env: {} }), (error) => error.code === "APPROVAL_INVALIDATED");
 
   const done = drive(box, "p1", file);
   assert.equal(done.code, 0, done.err + done.out);

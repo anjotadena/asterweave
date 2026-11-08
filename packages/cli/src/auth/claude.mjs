@@ -5,6 +5,7 @@
 import { CliError, EXIT } from "../exit-codes.mjs";
 import { runBinary } from "../proc.mjs";
 import { maskEmail, redactText } from "../redact.mjs";
+import { MIN_CLAUDE_VERSION, parseVersion, versionAtLeast } from "../runtime/claude/argv.mjs";
 import { handoffLogin, parseJsonObject, probeCwd } from "./common.mjs";
 import { saveReference } from "./credentials.mjs";
 
@@ -94,4 +95,23 @@ export async function loginClaude(options = {}) {
     { env, platform, homedir },
   );
   return { probe, reference };
+}
+
+/**
+ * Read-only check of the claude RUNNER prerequisites for `doctor`: is `claude` installed and at least the minimum version the
+ * runner expects (`claude --version`, never `-p`, never `doctor`). Never throws; not installed or too old is a WARN for the caller.
+ * @param {Parameters<typeof probeClaude>[0]} [options]
+ */
+export async function probeClaudeRunner({ env = process.env, spawn, exists, platform, cwd, timeoutMs, homedir } = {}) {
+  const result = await runBinary("claude", ["--version"], { env, spawn, exists, platform, timeoutMs, cwd: cwd ?? probeCwd({ env, platform, homedir }) });
+  if (result.error) {
+    const code = result.error.code;
+    if (code === "NOT_FOUND" || code === "ENOENT" || code === "SHELL_SHIM_ONLY") return { status: "warn", reason: "Claude Code (claude) was not found, so `asterweave run start` cannot run.", remediation: INSTALL };
+    return { status: "warn", reason: `Could not run 'claude --version': ${result.error.message}`, remediation: "Check that 'claude --version' runs and re-run." };
+  }
+  const version = parseVersion(result.stdout);
+  if (result.code !== 0 || version === null) return { status: "warn", reason: "Could not read the Claude Code version.", remediation: "Upgrade Claude Code (claude update) and re-run." };
+  const shown = version.join(".");
+  if (!versionAtLeast(version)) return { status: "warn", reason: `Claude Code ${shown} is older than ${MIN_CLAUDE_VERSION}, the minimum the runner expects (a conservative guess).`, remediation: "Update Claude Code (claude update)." };
+  return { status: "ok", reason: `Claude Code ${shown} (the runner expects ${MIN_CLAUDE_VERSION} or newer; a conservative guess, unverified against a live claude).`, remediation: null };
 }

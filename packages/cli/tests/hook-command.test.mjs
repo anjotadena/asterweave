@@ -143,6 +143,8 @@ test("the guard rules beyond the plugin apply: secrets, paths outside the worksp
   assert.equal(decisionOf(hook(payload("cat .env"))).permissionDecision, "deny");
   assert.equal(decisionOf(hook(payload("cat ../elsewhere.txt"))).permissionDecision, "deny");
   assert.equal(decisionOf(hook(payload("asterweave run approve r1 --approval a --subject abc"))).permissionDecision, "deny");
+  assert.equal(decisionOf(hook(payload("asterweave run approve r1 --approval a --subject abc --nonce 0123456789abcdef"))).permissionDecision, "deny", "a quoted nonce does not make it acceptable");
+  assert.equal(decisionOf(hook(payload("asterweave mcp test files --approve abcdef123456 --nonce 0123456789abcdef"))).permissionDecision, "deny");
   assert.equal(decisionOf(hook(payload(`echo x > "${join(userDir, "runs", "r", "run.json")}"`))).permissionDecision, "deny");
   assert.equal(decisionOf(hook(payload("echo $(whoami)"))).permissionDecision, "ask", "supervised: unparseable asks");
   assert.equal(decisionOf(hook(payload("npm install left-pad"))).permissionDecision, "ask");
@@ -308,4 +310,17 @@ test("N1: the real hook asks (never stays silent) for git and gh forms run from 
   // Round 6: the hook never follows a cd, so a cd together with another command asks even when it would land in a normal directory.
   assert.equal(decide("Bash", "cd packages/cli && git commit -m x", repo), "ask");
   assert.equal(existsSync(marker), false, "the hook only classifies: nothing ran the embedded configuration");
+});
+
+test("inside an Asterweave run (ASTERWEAVE_RUN_ID set) an ask becomes a deny with a way forward: headless claude cannot answer a prompt", () => {
+  const env = { ASTERWEAVE_RUN_ID: "run-1" };
+  for (const command of ["git push origin main", "npm test", "node a.js"]) {
+    const output = decisionOf(hook(payload(command), { env }));
+    assert.equal(output.permissionDecision, "deny", command);
+    assert.match(output.permissionDecisionReason, /headless run cannot ask/);
+    assert.match(output.permissionDecisionReason, /choose another approach/);
+  }
+  // Unchanged outside a run, and an allow stays an allow inside one.
+  assert.equal(decisionOf(hook(payload("npm test"))).permissionDecision, "ask");
+  assert.equal(hook(payload("ls"), { env }).out, "");
 });

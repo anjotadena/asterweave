@@ -4,12 +4,12 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test, { after } from "node:test";
 import { helpText, runCli, usageText } from "../src/cli.mjs";
 import { resolveRepo } from "../src/commands/run.mjs";
-import { invalidateApproval, requestApproval } from "../src/runtime/approvals.mjs";
+import { MAX_FAILED_ATTEMPTS, invalidateApproval, requestApproval } from "../src/runtime/approvals.mjs";
 import { createFakeExecutor, loadScript } from "../src/runtime/fake-executor.mjs";
 import { loadRun, runDir } from "../src/runtime/ledger.mjs";
 import { commitRecords, createRunForGraph, runLoop } from "../src/runtime/loop.mjs";
@@ -61,8 +61,19 @@ async function fixture({ goal = "ship the feature", runId = "run-1", plan, graph
   const identity = await resolveRepo({ cwd: repoDir(), env });
   const { dir } = createRunForGraph({ graph, goal, repo: { key: identity.key, realpath: identity.workspace }, runId, env });
   const steps = script(graph, plan);
-  const result = await runLoop({ dir, graph, executor: createFakeExecutor(steps), sleep: async () => {}, workspaceRoot: identity.workspace, guardOptions: { env, userDir } });
-  return { userDir, env, dir, graph, identity, steps, result, runId };
+  const nonces = new Map(); // what a supervising terminal would have shown: approval id -> plaintext nonce
+  const result = await runLoop({ dir, graph, executor: createFakeExecutor(steps), sleep: async () => {}, workspaceRoot: identity.workspace, guardOptions: { env, userDir }, onApprovalNonce: ({ approvalId, nonce }) => nonces.set(approvalId, nonce) });
+  return { userDir, env, dir, graph, identity, steps, result, runId, nonces };
+}
+
+/** Every byte under a directory, as one string (to prove a secret was never written anywhere). */
+function treeText(dir) {
+  const parts = [];
+  for (const name of readdirSync(dir)) {
+    const file = join(dir, name);
+    parts.push(statSync(file).isDirectory() ? treeText(file) : readFileSync(file, "latin1"));
+  }
+  return parts.join("\n");
 }
 
 const box = { now: () => new Date().toISOString() };
@@ -74,13 +85,14 @@ function seedApproval(fx, scope, requestedBy = "executor") {
     const { run } = loadRun(fx.dir);
     const result = requestApproval(run, { kind: "operation", scope, now: new Date().toISOString(), requestedBy });
     commitRecords({ dir: fx.dir, graph: fx.graph, lockToken: lock.token }, run, result.events);
+    fx.nonces.set(result.approval.id, result.nonce);
     return result.approval;
   } finally {
     lock.release();
   }
 }
 const planApproval = (fx) => fx.result.pendingApprovals[0];
-const approveArgs = (fx, approval = planApproval(fx), subject = approval.subjectHash.slice(0, 12)) => ["run", "approve", fx.runId, "--approval", approval.id, "--subject", subject];
+const approveArgs = (fx, approval = planApproval(fx), subject = approval.subjectHash.slice(0, 12), nonce = fx.nonces.get(approval.id)) => ["run", "approve", fx.runId, "--approval", approval.id, "--subject", subject, "--nonce", nonce];
 const BIDI = [0x061c, 0x200e, 0x200f, 0x2028, 0x2029, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069];
 const CONTROL = new RegExp(`[\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f${BIDI.map((code) => String.fromCharCode(code)).join("")}]`);
 
@@ -163,7 +175,9 @@ test("run show text lists nodes, approvals with the subject prefix, budgets and 
   assert.match(out, new RegExp(`subject ${subject}`));
   assert.match(out, /^ {2}tokens {6}unavailable$/m);
   assert.ok(!/tokens\s+0\b/.test(out), "tokens are never rendered as 0");
-  assert.match(out, new RegExp(`asterweave run approve run-1 --approval ap-1 --subject ${subject}`));
+  assert.match(out, /^ {2}asterweave run approve run-1$/m, "the terminal command comes first");
+  assert.match(out, new RegExp(`asterweave run approve run-1 --approval ap-1 --subject ${subject} --nonce <nonce>`));
+  assert.ok(!out.includes(planApproval(fx).nonceHash), "the nonce hash is not shown either");
   assert.equal(CONTROL.test(out.replaceAll("\n", "")), false);
 });
 
@@ -244,6 +258,7 @@ test("run approve with --approval and --subject records a flag approval, takes a
   const stored = loadRun(fx.dir).run;
   assert.notEqual(stored.approvals[0].grantedAt, null);
   assert.equal(stored.approvals[0].by.source, "flag");
+  assert.equal(stored.approvals[0].nonceHash, null, "the nonce is consumed");
   assert.equal(stored.status, "waiting-approval", "approving records the grant; the run continues only when it is driven again");
   assert.equal(inspectRunLock(fx.dir).state, "none");
   const events = readEvents(fx.dir);
@@ -283,10 +298,10 @@ test("run approve: a wrong, too short or missing subject grants nothing", async 
 test("run approve: unknown run, unknown approval, a live lock and ASTERWEAVE_RUN_ID are refused", async () => {
   const fx = await fixture();
   const approval = planApproval(fx);
-  const missingRun = await cli(["run", "approve", "ghost", "--approval", "ap-1", "--subject", "abcdef12", "--json"], fx);
+  const missingRun = await cli(["run", "approve", "ghost", "--approval", "ap-1", "--subject", "abcdef12", "--nonce", fx.nonces.get("ap-1"), "--json"], fx);
   assert.equal(missingRun.code, 1);
   assert.equal(json(missingRun).error.code, "RUN_NOT_FOUND");
-  const missingApproval = await cli(["run", "approve", fx.runId, "--approval", "ap-99", "--subject", "abcdef12", "--json"], fx);
+  const missingApproval = await cli(["run", "approve", fx.runId, "--approval", "ap-99", "--subject", "abcdef12", "--nonce", fx.nonces.get("ap-1"), "--json"], fx);
   assert.equal(missingApproval.code, 1);
   assert.equal(json(missingApproval).error.code, "APPROVAL_NOT_FOUND");
 
@@ -300,7 +315,7 @@ test("run approve: unknown run, unknown approval, a live lock and ASTERWEAVE_RUN
   }
 
   const inside = await cli([...approveArgs(fx), "--json"], { ...fx, env: { ...fx.env, ASTERWEAVE_RUN_ID: "run-1" } });
-  assert.equal(inside.code, 1);
+  assert.equal(inside.code, 7);
   assert.equal(json(inside).error.code, "APPROVAL_FORBIDDEN_CONTEXT");
   assert.equal(loadRun(fx.dir).run.approvals[0].grantedAt, null);
   assert.equal(approval.id, "ap-1");
@@ -355,7 +370,7 @@ test("run approve in a terminal asks y/N naming scope, target and subject; only 
 });
 
 async function runLoopAgain(fx) {
-  return runLoop({ dir: fx.dir, graph: fx.graph, executor: createFakeExecutor(fx.steps), sleep: async () => {}, workspaceRoot: fx.identity.workspace, guardOptions: { env: fx.env, userDir: fx.userDir } });
+  return runLoop({ dir: fx.dir, graph: fx.graph, executor: createFakeExecutor(fx.steps), sleep: async () => {}, workspaceRoot: fx.identity.workspace, guardOptions: { env: fx.env, userDir: fx.userDir }, onApprovalNonce: ({ approvalId, nonce }) => fx.nonces.set(approvalId, nonce) });
 }
 
 test("run approve prompt: Enter, n, Esc and Ctrl+D grant nothing (exit 1), Ctrl+C is 130", async () => {
@@ -388,7 +403,7 @@ test("run approve in a terminal: --approval needs --subject, --json needs the fl
   const common = { stdin: term.stdin, stdout: term.stdout, stderr: term.stderr, env: fx.env, cwd: repoDir(), proc };
   assert.equal(await runCli(["run", "approve", fx.runId, "--approval", "ap-1"], common), 2);
   assert.equal(await runCli(["run", "approve", fx.runId, "--json"], common), 2);
-  assert.equal(JSON.parse(term.text().trim().split("\n").at(-1)).error.code, "USAGE");
+  assert.equal(JSON.parse(term.text().trim().split("\n").at(-1)).error.code, "APPROVAL_TERMINAL_REQUIRED");
   grantPending(box, fx.dir, fx.graph);
   const idle = fakeTerminal();
   const code = await runCli(["run", "approve", fx.runId], { ...common, stdin: idle.stdin, stdout: idle.stdout, stderr: idle.stderr });
@@ -501,8 +516,15 @@ test("run start with the fake executor: one JSON object, exit 6 at the plan appr
   assert.equal(shown.goal, "dev goal");
   assert.equal(shown.approvals[0].subject, body.pendingApprovals[0].subject);
 
-  // Approve with the printed subject, resume, and the run completes with exit 0.
-  const approved = await cli(["run", "approve", "dev-1", "--approval", body.pendingApprovals[0].id, "--subject", body.pendingApprovals[0].subject, "--json"], { env });
+  // A headless supervisor printed no nonce, so flags cannot approve; the terminal prompt can.
+  assert.equal(started.err, "", "nothing is printed on stderr, and no nonce exists anywhere");
+  const forged = await cli(["run", "approve", "dev-1", "--approval", body.pendingApprovals[0].id, "--subject", body.pendingApprovals[0].subject, "--json"], { env });
+  assert.equal(forged.code, 2);
+  assert.equal(json(forged).error.code, "APPROVAL_TERMINAL_REQUIRED");
+  const guess = await cli(["run", "approve", "dev-1", "--approval", body.pendingApprovals[0].id, "--subject", body.pendingApprovals[0].subject, "--nonce", "00000000-00000000-00000000-00000000", "--json"], { env });
+  assert.equal(guess.code, 2, "no nonce was ever issued, so even a quoted one is not a flag grant: terminal only");
+  assert.equal(json(guess).error.code, "APPROVAL_TERMINAL_REQUIRED");
+  const approved = await inTty(["run", "approve", "dev-1"], "y", { env });
   assert.equal(approved.code, 0);
   const resumed = await cli(["run", "resume", "dev-1", "--executor", "fake", "--script", file, "--json"], { env });
   assert.equal(resumed.code, 0, resumed.err + resumed.out);
@@ -615,9 +637,9 @@ test("M1: inside a run (ASTERWEAVE_RUN_ID set) run show hides the subject hashes
   const text = await cli(["run", "show"], inRun);
   assert.ok(text.out.includes("hidden inside a run"));
   assert.ok(!text.out.includes(subject), "the hash is nowhere in the output");
-  assert.ok(!text.out.includes("Approve with:"));
+  assert.ok(!text.out.includes("Approve in a terminal"));
   const outside = await cli(["run", "show"], fx);
-  assert.ok(outside.out.includes(subject) && outside.out.includes("Approve with:"), "unchanged outside a run");
+  assert.ok(outside.out.includes(subject) && outside.out.includes("Approve in a terminal"), "unchanged outside a run");
 });
 
 test("M3: a target is shown WHOLE with its length and who asked; newline, tab and backslash are visible escapes", async () => {
@@ -643,7 +665,7 @@ test("M3: a target is shown WHOLE with its length and who asked; newline, tab an
 test("M3: the grant of a request whose scope cannot be shown faithfully is refused, in a terminal and with flags", async () => {
   const fx = await fixture();
   const seeded = seedApproval(fx, { operation: "deploy", target: `ok\u202Eevil` });
-  const flags = await cli(["run", "approve", fx.runId, "--approval", seeded.id, "--subject", seeded.subjectHash.slice(0, 12), "--json"], fx);
+  const flags = await cli(["run", "approve", fx.runId, "--approval", seeded.id, "--subject", seeded.subjectHash.slice(0, 12), "--nonce", fx.nonces.get(seeded.id), "--json"], fx);
   assert.equal(flags.code, 1);
   assert.equal(json(flags).error.code, "UNDISPLAYABLE_TARGET");
   const tty = await cli(["run", "approve", fx.runId], { ...fx, stdin: fakeTerminal().stdin });
@@ -725,14 +747,152 @@ test("L2: a FIFO is refused instead of blocking the command", { skip: process.pl
   assert.throws(() => loadScript(fifo), (error) => error.code === "SCRIPT_UNREADABLE");
 });
 
-test("help lists exit codes 6 and 7 and run's public subcommands only", async () => {
+test("help lists exit codes 6 and 7 and the public run subcommands", async () => {
   assert.match(helpText(), /^ {2}6 {4}approval required/m);
   assert.match(helpText(), /^ {2}7 {4}policy denied/m);
-  assert.match(usageText(), /^ {2}run {2,}Show, approve or abort a run$/m);
+  assert.match(usageText(), /^ {2}run {2,}\S/m);
   const help = await cli(["help", "run"], { env: cliEnv(tempDir("aw-rc-user-")) });
   assert.equal(help.code, 0);
-  for (const word of ["run show", "run approve", "run abort", "--subject", "Exit codes:"]) assert.ok(help.out.includes(word), word);
-  assert.equal(/\b(start|resume)\b/.test(help.out), false, "the hidden subcommands are not documented");
-  assert.equal(/run (start|resume)/.test(usageText() + helpText()), false);
+  for (const word of ["run show", "run approve", "run abort", "run start", "run resume", "--subject", "Exit codes:"]) assert.ok(help.out.includes(word), word);
   assert.equal(JSON.stringify(helpText()).includes("ASTERWEAVE_DEV_EXECUTORS"), false);
+});
+
+// --- terminal-only approvals ------------------------------------------------------------------------------
+
+test("TA1: flags without a nonce never grant (exit 2, terminal remediation); nothing is written", async () => {
+  const fx = await fixture();
+  const approval = planApproval(fx);
+  const before = readEvents(fx.dir).length;
+  const forged = await cli(["run", "approve", fx.runId, "--approval", approval.id, "--subject", approval.subjectHash.slice(0, 12), "--json"], fx);
+  assert.equal(forged.code, 2);
+  assert.equal(json(forged).error.code, "APPROVAL_TERMINAL_REQUIRED");
+  assert.match(json(forged).error.remediation, /terminal/);
+  const lone = await cli(["run", "approve", fx.runId, "--nonce", fx.nonces.get(approval.id), "--json"], fx);
+  assert.equal(lone.code, 2, "--nonce alone is a usage error");
+  assert.equal(readEvents(fx.dir).length, before);
+  assert.equal(loadRun(fx.dir).run.approvals[0].grantedAt, null);
+});
+
+test("TA2: a wrong nonce fails with exit 7 and is counted in the ledger; five lock the request even against the right nonce", async () => {
+  const fx = await fixture();
+  const approval = planApproval(fx);
+  const right = fx.nonces.get(approval.id);
+  const wrong = "11111111-11111111-11111111-11111111";
+  for (let i = 1; i <= MAX_FAILED_ATTEMPTS; i += 1) {
+    const result = await cli([...approveArgs(fx, approval, undefined, wrong), "--json"], fx);
+    assert.equal(result.code, 7, result.out);
+    assert.equal(json(result).error.code, "APPROVAL_NONCE_INVALID");
+    assert.equal(loadRun(fx.dir).run.approvals[0].failedAttempts, i, "the counter is in the request record");
+  }
+  assert.equal(readEvents(fx.dir).filter((event) => event.type === "approval.attempt-failed").length, MAX_FAILED_ATTEMPTS);
+  const locked = await cli([...approveArgs(fx, approval, undefined, right), "--json"], fx);
+  assert.equal(locked.code, 7);
+  assert.equal(json(locked).error.code, "APPROVAL_LOCKED");
+  assert.equal(loadRun(fx.dir).run.approvals[0].grantedAt, null);
+  // The terminal prompt is not subject to the lock.
+  assert.equal((await inTty(["run", "approve", fx.runId], "y", fx)).code, 0);
+  assert.equal(inspectRunLock(fx.dir).state, "none");
+});
+
+test("TA3: a nonce is single use", async () => {
+  const fx = await fixture();
+  const args = [...approveArgs(fx), "--json"];
+  assert.equal((await cli(args, fx)).code, 0);
+  const again = await cli(args, fx);
+  assert.equal(again.code, 1);
+  assert.equal(json(again).error.code, "APPROVAL_ALREADY_GRANTED");
+});
+
+test("TA4: agent markers (ASTERWEAVE_SESSION_ID, CLAUDECODE, CLAUDE_CODE_*) refuse both paths with exit 7", async () => {
+  const fx = await fixture();
+  for (const marker of [{ ASTERWEAVE_SESSION_ID: "s1" }, { CLAUDECODE: "1" }, { CLAUDE_CODE_ENTRYPOINT: "cli" }]) {
+    const env = { ...fx.env, ...marker };
+    const flags = await cli([...approveArgs(fx), "--json"], { ...fx, env });
+    assert.equal(flags.code, 7, JSON.stringify(marker));
+    assert.equal(json(flags).error.code, "APPROVAL_FORBIDDEN_CONTEXT");
+    const term = fakeTerminal();
+    const code = await runCli(["run", "approve", fx.runId], { stdin: term.stdin, stdout: term.stdout, stderr: term.stderr, env, cwd: repoDir(), proc: new EventEmitter() });
+    assert.equal(code, 7, "a real terminal does not help inside an agent session");
+    assert.ok(!/\[y\/N\]/.test(term.text()), "no prompt is shown");
+  }
+  assert.equal(loadRun(fx.dir).run.approvals[0].grantedAt, null);
+});
+
+test("TA5: only a TTY supervisor shows the nonce, on its own stderr; it is in no file, no JSON and no stdout", async () => {
+  const userDir = tempDir("aw-rc-user-");
+  const env = cliEnv(userDir, { ASTERWEAVE_DEV_EXECUTORS: "1" });
+  const file = writeScript(userDir, script(deliveryGraph));
+  const term = fakeTerminal();
+  const stdout = sink();
+  const code = await runCli(["run", "start", "--executor", "fake", "--script", file, "--run-id", "ta5", "--json"], { stdin: sink(), stdout, stderr: term.stderr, env, cwd: repoDir(), proc: new EventEmitter() });
+  assert.equal(code, 6);
+  const shown = /One-time nonce: ([0-9a-f]{8}(?:-[0-9a-f]{8}){3})/.exec(term.errText());
+  assert.ok(shown, term.errText());
+  const nonce = shown[1];
+  assert.ok(!stdout.text().includes(nonce) && !stdout.text().includes(nonce.replaceAll("-", "")), "not in the JSON result");
+  const dir = runDir((await resolveRepo({ cwd: repoDir(), env })).key, "ta5", { env });
+  const stored = treeText(dir) + treeText(userDir);
+  assert.ok(!stored.includes(nonce) && !stored.includes(nonce.replaceAll("-", "")), "the plaintext is written nowhere");
+  const shownRun = await cli(["run", "show", "ta5", "--json"], { env });
+  assert.ok(!shownRun.out.includes(nonce));
+  // It does approve, once, through the flags.
+  const approval = json(shownRun).run.approvals[0];
+  const ok = await cli(["run", "approve", "ta5", "--approval", approval.id, "--subject", approval.subject, "--nonce", nonce.toUpperCase(), "--json"], { env });
+  assert.equal(ok.code, 0, ok.out + ok.err);
+});
+
+test("TA6: a restarted TTY supervisor issues a fresh nonce (hash only) for a request an earlier headless one made", async () => {
+  const userDir = tempDir("aw-rc-user-");
+  const env = cliEnv(userDir, { ASTERWEAVE_DEV_EXECUTORS: "1" });
+  const file = writeScript(userDir, script(deliveryGraph));
+  assert.equal((await cli(["run", "start", "--executor", "fake", "--script", file, "--run-id", "ta6", "--json"], { env })).code, 6);
+  const term = fakeTerminal();
+  const code = await runCli(["run", "resume", "ta6", "--executor", "fake", "--script", file, "--json"], { stdin: sink(), stdout: sink(), stderr: term.stderr, env, cwd: repoDir(), proc: new EventEmitter() });
+  assert.equal(code, 6);
+  const nonce = /One-time nonce: ([0-9a-f-]{35})/.exec(term.errText())?.[1];
+  assert.ok(nonce, term.errText());
+  const dir = runDir((await resolveRepo({ cwd: repoDir(), env })).key, "ta6", { env });
+  assert.ok(readEvents(dir).some((event) => event.type === "approval.nonce-issued" && !JSON.stringify(event).includes(nonce)));
+  assert.ok(!treeText(dir).includes(nonce));
+  const approval = json(await cli(["run", "show", "ta6", "--json"], { env })).run.approvals[0];
+  assert.equal((await cli(["run", "approve", "ta6", "--approval", approval.id, "--subject", approval.subject, "--nonce", nonce, "--json"], { env })).code, 0);
+});
+
+test("TA7: a request without nonceHash (an old run) can only be approved at the terminal prompt", async () => {
+  const fx = await fixture();
+  const lock = acquireRunLock(fx.dir);
+  try {
+    // Rewrite the snapshot the way a pre-D-b build left it: no nonce fields at all.
+    const file = join(fx.dir, "run.json");
+    const snapshot = JSON.parse(readFileSync(file, "utf8"));
+    for (const approval of snapshot.approvals) for (const key of ["nonceHash", "nonceExpiresAt", "failedAttempts", "lastFailedAt"]) delete approval[key];
+    writeFileSync(file, JSON.stringify(snapshot));
+  } finally {
+    lock.release();
+  }
+  const approval = planApproval(fx);
+  const flags = await cli(approveArgs(fx, approval, undefined, fx.nonces.get(approval.id)), fx);
+  assert.equal(flags.code, 2, flags.out + flags.err);
+  assert.equal((await inTty(["run", "approve", fx.runId], "y", fx)).code, 0);
+});
+
+test("TA7b: a TTY supervisor that resumes does NOT issue a nonce for a legacy request without nonceHash; it stays terminal-only", async () => {
+  const userDir = tempDir("aw-rc-user-");
+  const env = cliEnv(userDir, { ASTERWEAVE_DEV_EXECUTORS: "1" });
+  const file = writeScript(userDir, script(deliveryGraph));
+  assert.equal((await cli(["run", "start", "--executor", "fake", "--script", file, "--run-id", "ta7b", "--json"], { env })).code, 6);
+  const dir = runDir((await resolveRepo({ cwd: repoDir(), env })).key, "ta7b", { env });
+  const snapshotFile = join(dir, "run.json");
+  const snapshot = JSON.parse(readFileSync(snapshotFile, "utf8"));
+  for (const approval of snapshot.approvals) for (const key of ["nonceHash", "nonceExpiresAt", "failedAttempts", "lastFailedAt"]) delete approval[key];
+  writeFileSync(snapshotFile, JSON.stringify(snapshot));
+  const term = fakeTerminal();
+  const code = await runCli(["run", "resume", "ta7b", "--executor", "fake", "--script", file, "--json"], { stdin: sink(), stdout: sink(), stderr: term.stderr, env, cwd: repoDir(), proc: new EventEmitter() });
+  assert.equal(code, 6);
+  assert.ok(!/One-time nonce/.test(term.errText()), "no nonce is shown for a legacy request");
+  assert.ok(!readEvents(dir).some((event) => event.type === "approval.nonce-issued"), "and none is stored");
+  const approval = json(await cli(["run", "show", "ta7b", "--json"], { env })).run.approvals[0];
+  const flags = await cli(["run", "approve", "ta7b", "--approval", approval.id, "--subject", approval.subject, "--nonce", "00000000-00000000-00000000-00000000", "--json"], { env });
+  assert.equal(flags.code, 2);
+  assert.equal(json(flags).error.code, "APPROVAL_TERMINAL_REQUIRED");
 });

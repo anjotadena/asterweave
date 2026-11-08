@@ -41,6 +41,8 @@ import {
   isValid,
   pendingApprovals,
   requestApproval,
+  reissueNonce,
+  findApproval,
   scopeHash,
   validScopedApprovals,
 } from "./approvals.mjs";
@@ -104,6 +106,8 @@ export function applyLoopEvent(run, event) {
   switch (event.type) {
     case "approval.requested":
     case "approval.granted":
+    case "approval.nonce-issued":
+    case "approval.attempt-failed":
     case "approval.invalidated":
       return applyApprovalEvent(run, event);
     case "policy.bound": {
@@ -412,6 +416,28 @@ function normalizeResult(result) {
   };
 }
 
+const EXECUTOR_EVENTS = {
+  "tool.observed": { id: "s", name: "s", inputSummary: "s", at: "s" },
+  "route.fallback": { from: "s", to: "s", class: "s" },
+  "provider.session": { providerSessionId: "s", routeModel: "s" },
+  "runner.turn": { ok: "b", class: "s", exitCode: "n", killed: "b", durationMs: "n", costUsd: "n", model: "s", malformedLines: "n", toolEventsDropped: "n" },
+};
+
+/** A whitelisted ledger record built from what an executor reported, or null. Unknown types and fields are dropped. */
+function executorRecord(raw, node, attempt) {
+  if (!isObject(raw) || typeof raw.type !== "string" || !Object.hasOwn(EXECUTOR_EVENTS, raw.type)) return null;
+  const shape = EXECUTOR_EVENTS[raw.type];
+  const record = { type: raw.type, node, attempt };
+  for (const [key, kind] of Object.entries(shape)) {
+    const value = raw[key];
+    if (kind === "s" && typeof value === "string") record[key] = cap(value, 200);
+    else if (kind === "n" && typeof value === "number" && Number.isFinite(value)) record[key] = value;
+    else if (kind === "b" && typeof value === "boolean") record[key] = value;
+    else record[key] = null;
+  }
+  return record;
+}
+
 const slimHook = (r) => ({ id: r.id, source: r.source, kind: r.kind, status: r.status, effect: r.effect, reason: r.reason ?? null, code: r.code ?? null, durationMs: r.durationMs ?? 0 });
 
 // ---------------------------------------------------------------------------------------------
@@ -434,6 +460,7 @@ class Session {
     this.nodeLimits = { ...resolveNodeBudgets(this.policy), ...(options.nodeBudgets ?? {}) };
     this.nodeTokens = Object.create(null); // per-node cumulative tokens (measured only); rebuilt from the ledger at start
     this.nodeCalls = Object.create(null); // per-node tool calls started
+    this.nonceHeld = new Set();
     this.hooks = Array.isArray(options.hooks) ? options.hooks : (options.hooks?.hooks ?? []);
     this.runHooks = options.runHooks ?? defaultRunHooks;
     this.stepMs = options.stepMs ?? DEFAULT_STEP_MS;
@@ -441,6 +468,7 @@ class Session {
     this.feedback = null;
     this.lastResult = null;
     this.lastDecision = null;
+    this.runnerFailure = null;
     this.stopReason = null;
     this.exitOverride = null;
     this.cursor = emptyCursor();
@@ -592,12 +620,50 @@ class Session {
   // -- approvals ------------------------------------------------------------------------------
 
   async requestOperation(scope, reason, requestedBy = "guard") {
-    const result = requestApproval(this.run, { kind: "operation", scope, now: this.nowIso(), reason, requestedBy });
+    const result = requestApproval(this.run, { kind: "operation", scope, now: this.nowIso(), reason, requestedBy, rng: this.o.approvalRng, issueNonce: typeof this.o.onApprovalNonce === "function" });
     for (const event of result.events) {
       this.append(event);
+      this.announceNonce(result);
       await this.fire("approval.requested", { approvalId: result.approval.id, kind: "operation", scope: result.approval.scope, requestedBy });
     }
     return result.approval;
+  }
+
+  /**
+   * Hand the plaintext nonce of a NEW approval request to the supervisor's terminal callback (`onApprovalNonce`, set only
+   * when the supervisor's own stderr is a TTY). The plaintext stays in memory: it is not in any record, hook payload or
+   * result; `this.nonceHeld` only remembers WHICH requests this process announced.
+   */
+  announceNonce(result) {
+    if (result.nonce === null || typeof this.o.onApprovalNonce !== "function") return;
+    this.nonceHeld.add(result.approval.id);
+    try {
+      this.o.onApprovalNonce({ runId: this.run.runId, approvalId: result.approval.id, kind: result.approval.kind, nonce: result.nonce, expiresAt: result.approval.nonceExpiresAt });
+    } catch {
+      /* showing the nonce is best effort: the terminal prompt always works */
+    }
+  }
+
+  /**
+   * A supervisor that restarted does not hold the plaintext nonce of requests made earlier: when it has a terminal
+   * callback it issues a fresh nonce (an `approval.nonce-issued` record with only the hash) for each pending request it has
+   * not announced. Without the callback nothing is issued and those requests can only be approved at the terminal prompt.
+   */
+  issueMissingNonces() {
+    if (typeof this.o.onApprovalNonce !== "function" || !this.lock || this.lock.lost === true || ["completed", "aborted"].includes(this.run.status)) return;
+    for (const approval of pendingApprovals(this.run)) {
+      if (this.nonceHeld.has(approval.id)) continue;
+      if (!Object.hasOwn(approval, "nonceHash")) continue; // a legacy request stays terminal-only
+      const issued = reissueNonce(this.run, approval.id, { now: this.nowIso(), rng: this.o.approvalRng });
+      if (issued.nonce === null) continue;
+      for (const event of issued.events) this.append(event);
+      this.nonceHeld.add(approval.id);
+      try {
+        this.o.onApprovalNonce({ runId: this.run.runId, approvalId: approval.id, kind: approval.kind, nonce: issued.nonce, expiresAt: findApproval(this.run, approval.id)?.nonceExpiresAt ?? null });
+      } catch {
+        /* best effort */
+      }
+    }
   }
 
   /**
@@ -639,6 +705,8 @@ class Session {
     if (iterations > 0 && used.iterations >= iterations) return { name: "iterations", used: used.iterations, limit: iterations };
     if (wallMs > 0 && used.wallMs >= wallMs) return { name: "wallMs", used: used.wallMs, limit: wallMs };
     if (tokens > 0 && typeof used.tokens === "number" && used.tokens >= tokens) return { name: "tokens", used: used.tokens, limit: tokens };
+    // An executor that runs tools itself (claude) never reaches the guard's dispatch check: the run-level call budget is checked here.
+    if (this.executor.observesTools === true && this.limits.toolCalls > 0 && used.toolCalls >= this.limits.toolCalls) return { name: "toolCalls", used: used.toolCalls, limit: this.limits.toolCalls };
     return this.nodeBudget();
   }
 
@@ -868,9 +936,10 @@ class Session {
       return;
     }
     if (decision.decision === "require-approval") {
-      const result = requestApproval(this.run, { kind: "plan", scope: { operation: "plan", target: id }, artifact, now: this.nowIso(), reason: decision.reason, requestedBy: "guard" });
+      const result = requestApproval(this.run, { kind: "plan", scope: { operation: "plan", target: id }, artifact, now: this.nowIso(), reason: decision.reason, requestedBy: "guard", rng: this.o.approvalRng, issueNonce: typeof this.o.onApprovalNonce === "function" });
       for (const event of result.events) {
         this.append(event);
+        this.announceNonce(result);
         await this.fire("approval.requested", { approvalId: result.approval.id, kind: "plan", scope: result.approval.scope });
       }
       this.stopReason = decision.reason;
@@ -938,11 +1007,17 @@ class Session {
       const observation = await abortable(this.executor.observe(ctx), signal);
       raw = await abortable(this.executor.decide(ctx, observation), signal);
     } catch (error) {
+      // On an abort or a step deadline the loop stopped waiting before the executor's turn ended: wait (bounded) for it to be
+      // killed and to hand over what it observed, so its tool calls, usage and provider session land on THIS attempt.
+      await this.settleExecutor();
       this.recordUsage(ctx); // an executor that failed or was cut off may still have used tokens
+      this.recordExecutorEvents(ctx);
       if (this.userAborted()) return;
+      if (error?.name === "RunnerFailure") return this.blockForRunner(error, step, attempt);
       return this.reject(step, attempt, [error?.name === "TimeoutError" ? "executor: the step deadline was exceeded" : "executor: failed to produce an action"]);
     }
     this.recordUsage(ctx);
+    this.recordExecutorEvents(ctx);
     if (this.userAborted()) return;
     const verdict = validateAction(raw);
     if (!verdict.ok) return this.reject(step, attempt, verdict.errors);
@@ -986,6 +1061,52 @@ class Session {
     this.append(event);
     const total = eventTotal(event);
     if (total !== null) this.nodeTokens[node] = (this.nodeTokens[node] ?? 0) + total;
+  }
+
+  async settleExecutor() {
+    if (typeof this.executor.idle !== "function") return;
+    let timer;
+    try {
+      await Promise.race([Promise.resolve(this.executor.idle()), new Promise((resolve) => { timer = setTimeout(resolve, this.o.settleMs ?? 5000); })]);
+    } catch {
+      /* the executor's own failure is handled by the caller */
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * What a RUNNER (an executor that runs tools itself, claude) observed, as ledger records: `tool.observed` (counted against the
+   * toolCalls budgets), `route.fallback`, `provider.session`, `runner.turn`. The executor is untrusted: only these types are
+   * taken, only their known fields, strings capped and redacted.
+   */
+  recordExecutorEvents(ctx) {
+    let list = [];
+    try {
+      list = this.executor.drainEvents?.(ctx) ?? [];
+    } catch {
+      list = [];
+    }
+    if (!Array.isArray(list)) return;
+    const node = this.run.currentNode;
+    for (const raw of list.slice(0, 500)) {
+      const record = executorRecord(raw, node, ctx.attempt);
+      if (record === null) continue;
+      if (record.type === "tool.observed") {
+        this.patchUsed({ toolCalls: this.run.budgets.used.toolCalls + 1 });
+        this.nodeCalls[node] = (this.nodeCalls[node] ?? 0) + 1;
+      }
+      this.append(record);
+    }
+  }
+
+  /** A runner failure that no retry or fallback can fix here: the node is blocked (resumable) and the reason is kept for the caller. */
+  async blockForRunner(error, step, attempt) {
+    const failureClass = typeof error.class === "string" ? error.class.slice(0, 40) : "unknown";
+    this.runnerFailure = { class: failureClass, message: cap(error.message, 300), remediation: cap(error.remediation ?? "", 300), retryable: error.retryable === true };
+    this.stopReason = `RUNNER_${failureClass.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
+    this.append({ type: "runner.failure", node: this.run.currentNode, step, attempt: attempt.n, ...this.runnerFailure });
+    await this.commit({ type: "complete", outcome: "blocked", signature: `runner:${failureClass}` }, { step });
   }
 
   async resumePending(pending, signal) {
@@ -1124,6 +1245,7 @@ class Session {
       exitCode,
       run,
       reason: this.stopReason,
+      runnerFailure: this.runnerFailure,
       decision: this.lastDecision,
       pendingApprovals: pendingApprovals(run),
       usage: { tokens: run.budgets.used.tokens ?? null },
@@ -1162,7 +1284,14 @@ export async function runLoop(options) {
   const session = new Session(options);
   try {
     await session.main();
-    if (session.run) await session.fire("run.finished", { status: session.run.status });
+    if (session.run) {
+      try {
+        session.issueMissingNonces();
+      } catch {
+        /* the ledger may be unwritable (lock lost); the terminal prompt still works */
+      }
+      await session.fire("run.finished", { status: session.run.status });
+    }
     return session.result();
   } finally {
     session.lock?.release();

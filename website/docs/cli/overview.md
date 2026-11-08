@@ -35,7 +35,7 @@ Phase B adds the machinery a future agent loop will run on, so that its safety p
 | A fail-closed guard with reason codes, supervised and autonomous modes, `policy.json`, scoped approvals | [Policy and guards](/cli/policy-and-guards) |
 | User and trusted-repository hooks around a run | [Hooks](/cli/hooks) |
 
-**Limits of Phase B.** There are **no model calls** and **no real tool execution**: the only executor is a scripted fake one, and the tool dispatcher is a simulation. The commands that start or resume a run (`run start`, `run resume`) are hidden and need `ASTERWEAVE_DEV_EXECUTORS=1`. The shell classifier is a heuristic, not a sandbox ([limits](/cli/policy-and-guards#limits)). The hidden `hook pre-tool-use` command is experimental and does not replace the plugin's guard. Free text typed in the interactive session still shows "not available in this build".
+**Limits.** `run start` and `run resume` drive a run with headless `claude` turns ([The Claude runner](/cli/runner)); that runner is **unverified against a live claude**, claude executes its own tools (the `PreToolUse` hook is the only gate before them) and the evidence it reports is a claim. Only the scripted fake executor (`--executor fake`, `--runner fake`) is development-only and needs `ASTERWEAVE_DEV_EXECUTORS=1`; the tool dispatcher behind it is a simulation. The shell classifier is a heuristic, not a sandbox ([limits](/cli/policy-and-guards#limits)). The hidden `hook pre-tool-use` command is experimental and does not replace the plugin's guard. Free text typed in the interactive session still shows "not available in this build".
 
 ## Requirements
 
@@ -116,7 +116,7 @@ In a picker or at the `trust grant` y/N prompt, Ctrl+D behaves like Esc: it canc
 | `asterweave repo status` | Show the saved connection, work-tree state (always `unknown`: the work tree is never inspected), and trust | `--json` |
 | `asterweave config show` | Show effective configuration with the origin of every key. See [Configuration and trust](/cli/config-and-trust) | `--json`, `--strict`, `--path dir`, `--runner local`, `--github-host host`, `--ui-color auto\|always\|never` |
 | `asterweave run show [runId]` | Show a run: status, nodes and attempts, approvals with their subject hash, budgets, lock and policy. Defaults to the newest run of the repository. See [Runs](/cli/runs) | `--json` |
-| `asterweave run approve runId` | Approve a waiting run: y/N in a terminal, or `--approval` with the `--subject` hash prefix that `run show` prints | `--approval id`, `--subject hash`, `--json` |
+| `asterweave run approve runId` | Approve a waiting run, terminal only: y/N prompt, or `--approval` + `--subject` + the one-time `--nonce` that the driving terminal printed (flags alone never grant) | `--approval id`, `--subject hash`, `--nonce code`, `--json` |
 | `asterweave run abort runId` | Stop a run for good. Idempotent | `--yes`, `--json` |
 | `asterweave trust [status\|grant\|revoke]` | Review, grant, or revoke trust for a repository. Defaults to `status` | `--path dir`, `--json` |
 
