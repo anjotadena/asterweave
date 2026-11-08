@@ -107,6 +107,7 @@ In a picker or at the `trust grant` y/N prompt, Ctrl+D behaves like Esc: it canc
 | --- | --- | --- |
 | `asterweave` | Start the interactive session (the walkthrough above) | none. `--json` is rejected |
 | `asterweave help [command]` | Show usage, or detailed help for one command | none |
+| `asterweave pipeline status\|watch\|diagnose <pr>` | Monitor a pull request and its pipeline, decide whether it is closable, print an explicit diagnosis packet (polling only, read-only, no model calls). See [Pull request and pipeline monitoring](/cli/pipeline) | `--json`, `--repo owner/name`, `--refresh`, `--timeout`, `--interval`, `--run`, `--check` |
 | `asterweave --version`, `-v` | Print the version | none |
 | `asterweave doctor` | Read-only health report. See [check ids](/cli/exit-codes#doctor-check-ids) | `--json` |
 | `asterweave auth status` | Masked sign-in state of the three planes. See [Authentication](/cli/auth) | `--json`, `--host h` |

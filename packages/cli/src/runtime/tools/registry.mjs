@@ -235,7 +235,9 @@ export function createRegistry({ stageLimit = STAGE_TOOL_LIMIT } = {}) {
         return { ok: true, trust: "untrusted", source, content, attempts: attempt };
       } catch (error) {
         lastError = error;
-        const retriable = tool.retry !== null && error instanceof ToolError && error.transient === true && error.code !== "TOOL_ABORTED" && attempt < attempts && ctx.signal?.aborted !== true;
+        // An exhausted rate limit that resets later than the retry cap is not retried inside the cap.
+        const exhausted = error.code === "GITHUB_RATE_LIMITED" && Number.isFinite(error.retryAfterMs) && error.retryAfterMs > tool.retry.maxMs;
+        const retriable = tool.retry !== null && error instanceof ToolError && error.transient === true && error.code !== "TOOL_ABORTED" && attempt < attempts && ctx.signal?.aborted !== true && !exhausted;
         if (!retriable) break;
         const ceiling = Math.min(tool.retry.maxMs, tool.retry.baseMs * 2 ** (attempt - 1));
         const jittered = Math.floor(ceiling * (0.5 + 0.5 * Math.min(1, Math.max(0, random()))));

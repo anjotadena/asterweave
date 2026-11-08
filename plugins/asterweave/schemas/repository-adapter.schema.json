@@ -46,6 +46,16 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "requiredChecks": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "\\S"
+          }
+        },
         "parallelism": {
           "type": "object",
           "additionalProperties": false,

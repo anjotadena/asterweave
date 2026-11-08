@@ -203,3 +203,17 @@ test("the view redacts secret-like keys and token or email shapes, and does not 
   assert.ok(resolved.entries["qualityGates.required"].value[0].command.includes(token));
   assert.equal(resolved.unknown.find((entry) => entry.key === "api.token").value, token);
 });
+
+test("completion.requiredChecks in the adapter is validated (exit 5) and does not become a config key", () => {
+  const s = setup();
+  s.adapter({ version: 1, completion: { requiredChecks: ["ci.yml", "build"] } });
+  const resolved = resolveConfig({ env: s.env, repoPath: s.repo });
+  assert.equal(resolved.repo.hasAdapter, true);
+  assert.ok(!Object.keys(resolved.entries).some((key) => key.startsWith("completion")));
+  for (const requiredChecks of ["ci", [1], [""], ["x".repeat(201)], Array.from({ length: 51 }, (_, i) => `c${i}`)]) {
+    s.adapter({ version: 1, completion: { requiredChecks } });
+    assert.throws(() => resolveConfig({ env: s.env, repoPath: s.repo }), (error) => error instanceof ConfigError && error.exitCode === EXIT.CONFIG && /completion\.requiredChecks/.test(error.message));
+  }
+  s.adapter({ version: 1, completion: "nope" });
+  assert.throws(() => resolveConfig({ env: s.env, repoPath: s.repo }), (error) => error instanceof ConfigError);
+});

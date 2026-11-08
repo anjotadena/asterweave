@@ -314,6 +314,19 @@ function validateAdapterObject(adapter, root, plannedPaths = new Set()) {
     const maxWorkers = adapter.completion?.parallelism?.maxWorkers;
     if (!adapter.completion || typeof adapter.completion !== "object" || Array.isArray(adapter.completion)) errors.push("adapter: completion must be an object");
     else if (maxWorkers !== undefined && (!Number.isInteger(maxWorkers) || maxWorkers < 1 || maxWorkers > 12)) errors.push("adapter: completion.parallelism.maxWorkers must be an integer from 1 to 12");
+    if (adapter.completion && typeof adapter.completion === "object" && !Array.isArray(adapter.completion)) {
+      for (const field of Object.keys(adapter.completion)) if (!["parallelism", "requiredChecks"].includes(field)) errors.push(`adapter: completion.${field} is not a supported property`);
+      const checks = adapter.completion.requiredChecks;
+      if (checks !== undefined) {
+        if (!Array.isArray(checks)) errors.push("adapter: completion.requiredChecks must be an array of strings");
+        else {
+          if (checks.length > 50) errors.push("adapter: completion.requiredChecks may list at most 50 checks");
+          checks.slice(0, 50).forEach((check, index) => {
+            if (typeof check !== "string" || check.trim() === "" || check.length > 200) errors.push(`adapter: completion.requiredChecks[${index}] must be a non-empty string of at most 200 characters`);
+          });
+        }
+      }
+    }
   }
   if (adapter.handoff !== undefined) {
     const handoff = adapter.handoff;

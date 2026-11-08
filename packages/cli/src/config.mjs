@@ -16,6 +16,7 @@ import { HOST_PATTERN } from "./host.mjs";
 import { userFilePath } from "./paths.mjs";
 import { isSecretKeyName, redactDeep, sanitizeForTerminal } from "./redact.mjs";
 import { validateHookEntries } from "./runtime/hooks.mjs";
+import { validateRequiredChecks } from "./runtime/pipeline/state.mjs";
 import { EFFORTS, MAX_FALLBACK, MODEL_ID_PATTERN, STAGE_NODES } from "./runtime/routing.mjs";
 import { parseJsonText, readJson, StoreError } from "./store.mjs";
 import { assertTrusted, safeTrustStatus } from "./trust.mjs";
@@ -198,6 +199,11 @@ function validateAdapter(data, file) {
     if (data.provider.workItems !== undefined && !WORK_ITEM_PROVIDERS.includes(data.provider.workItems)) {
       throw new ConfigError(`${file}: provider.workItems must be one of ${WORK_ITEM_PROVIDERS.join(", ")}.`, { key: "provider.workItems", origin });
     }
+  }
+  if (data.completion !== undefined) {
+    if (!isPlainObject(data.completion)) throw new ConfigError(`${file}: 'completion' must be an object.`, { key: "completion", origin });
+    const problems = data.completion.requiredChecks === undefined ? [] : validateRequiredChecks(data.completion.requiredChecks);
+    if (problems.length > 0) throw new ConfigError(`${file}: ${problems.slice(0, 3).join("; ")}.`, { key: "completion.requiredChecks", origin });
   }
   if (data.hooks !== undefined) {
     // Executable (hook commands): only validated here; they are loaded solely for a trusted repository (runtime/hooks.mjs).
