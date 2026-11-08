@@ -2,6 +2,7 @@
 // exit-codes.mjs and website/docs/cli/exit-codes.md.
 
 import { EXIT, UsageError } from "../exit-codes.mjs";
+import { contextHelpText } from "./context.mjs";
 import { mcpHelpText } from "./mcp.mjs";
 import { pipelineHelpText } from "./pipeline.mjs";
 import { sessionHelpText } from "./session.mjs";
@@ -117,7 +118,7 @@ export const COMMAND_HELP = Object.freeze({
   run: block([
     "asterweave run - start, resume, inspect, approve or abort a run",
     "",
-    "Usage: asterweave run start <goal> [--workflow delivery|bugfix] [--session <id>] [--worktree <name>] [--runner claude] [--json]",
+    "Usage: asterweave run start <goal> [--workflow delivery|bugfix] [--session <id>] [--worktree <name>] [--image <path>]... [--runner claude] [--json]",
     "       asterweave run resume <runId> [--json]",
     "       asterweave run show [runId] [--json]",
     "       asterweave run approve <runId> [--approval <id> --subject <hash> --nonce <code>] [--json]",
@@ -129,6 +130,8 @@ export const COMMAND_HELP = Object.freeze({
     "         trusted repository (exit 4) and an installed, recent claude (exit 1, nothing is created). --session links an existing session",
     "         (and uses its worktree); --worktree creates an isolated worktree and a session. Claude executes its own tools: the",
     "         PreToolUse hook is the only gate before them, and evidence it reports is a claim, not proof. Stops at approvals (exit 6).",
+    "         --image <path> (repeatable, PNG/JPEG/WebP, metadata stripped) sends images with the first turn only; the routed model must list images in the",
+    "         static catalog (exit 2 otherwise); what is sent is printed first. See the images docs page.",
     "resume   Continues a paused, blocked or approved run with the same runner (the provider session is resumed when the model is unchanged).",
     "show     Graph, status, per-node attempts, approvals (with the subject hash prefix), budgets (tokens are",
     "         'unavailable' when unknown, never 0), the run lock and the policy. Without a run id: the newest run.",
@@ -182,6 +185,7 @@ export const COMMAND_HELP = Object.freeze({
   ]),
   mcp: block(mcpHelpText.split("\n")),
   session: block(sessionHelpText.trimEnd().split("\n")),
+  context: block(contextHelpText.trimEnd().split("\n")),
   pipeline: block(pipelineHelpText.trimEnd().split("\n")),
   trust: block([
     "asterweave trust - review, grant or revoke trust for a repository",

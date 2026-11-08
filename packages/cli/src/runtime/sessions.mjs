@@ -23,7 +23,8 @@ import { stringifyJson } from "../json.mjs";
 import { resolveUserDir } from "../paths.mjs";
 import { redactDeep, redactText, sanitizeForTerminal } from "../redact.mjs";
 import { parseJsonText, StoreError, writeJsonAtomic } from "../store.mjs";
-import { repoDirName } from "./ledger.mjs";
+import { IMAGE_FORMATS, IMAGE_LIMITS } from "./image-format.mjs";
+import { isValidRunId, repoDirName } from "./ledger.mjs";
 import { acquireRunLock } from "./lock.mjs";
 
 export const SESSION_SCHEMA_VERSION = 2;
@@ -37,7 +38,7 @@ export const EVENT_VERSION = 1;
 const DIR_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const EVENT_TYPE = /^[a-z][a-z0-9.-]{0,63}$/;
 const RESERVED_EVENT_KEYS = new Set(["v", "seq", "at", "sessionId"]);
-const PATCH_KEYS = ["status", "archivedAt", "runId", "node", "title", "goal", "providerSessionId", "usage"];
+const PATCH_KEYS = ["status", "archivedAt", "runId", "node", "title", "goal", "providerSessionId", "usage", "attachments"];
 const USAGE_KEYS = ["tokens", "inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens"];
 const LIST_DEFAULT = 100;
 const LIST_MAX = 1000;
@@ -118,6 +119,57 @@ function normalizeWorktree(raw) {
   return { path: clip(raw.path, 4096), branch: strOrNull(raw.branch, 200), base: strOrNull(raw.base, 200), created: raw.created === true };
 }
 
+export const ATTACHMENTS_MAX = 50;
+const ATTACHMENT_ID = /^img_[0-9a-f]{12}$/;
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+
+/** A file name safe to store and print: secrets redacted, controls neutralised, whitespace collapsed, at most 80 characters. */
+export function cleanAttachmentName(text) {
+  return clip(sanitizeForTerminal(redactText(String(text ?? "")).text).replace(/\s+/g, " ").trim(), 80);
+}
+
+const validRunIdOrNull = (value) => (typeof value === "string" && isValidRunId(value) ? value : null);
+
+/** One attached image record (metadata only, never bytes). Invalid entries are dropped; the id must derive from the hash. */
+function normalizeAttachment(raw) {
+  if (!isObject(raw) || typeof raw.id !== "string" || typeof raw.sha256 !== "string" || !ATTACHMENT_ID.test(raw.id) || !SHA256_HEX.test(raw.sha256)) return null;
+  if (raw.id !== `img_${raw.sha256.slice(0, 12)}` || !Object.hasOwn(IMAGE_FORMATS, raw.format)) return null;
+  const int = (value, min, max) => (Number.isInteger(value) && value >= min && value <= max ? value : null);
+  const bytes = int(raw.bytes, 1, IMAGE_LIMITS.maxBytes);
+  const width = int(raw.width, 1, IMAGE_LIMITS.maxDimension);
+  const height = int(raw.height, 1, IMAGE_LIMITS.maxDimension);
+  if (bytes === null || width === null || height === null) return null;
+  return {
+    id: raw.id,
+    sha256: raw.sha256,
+    format: raw.format,
+    mime: IMAGE_FORMATS[raw.format].mime,
+    bytes,
+    width,
+    height,
+    name: cleanAttachmentName(raw.name),
+    addedAt: strOrNull(raw.addedAt, 40),
+    metadataStripped: raw.metadataStripped === true,
+    dropped: Array.isArray(raw.dropped) ? raw.dropped.filter((kind) => typeof kind === "string" && /^[a-z0-9-]{1,32}$/.test(kind)).slice(0, 16) : [],
+    sentRunId: validRunIdOrNull(raw.sentRunId),
+    claimedRunId: validRunIdOrNull(raw.claimedRunId),
+  };
+}
+
+/** Older records have no `attachments`: they load as []. Duplicated hashes collapse to the first entry. */
+function normalizeAttachments(raw) {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const item of raw.slice(0, ATTACHMENTS_MAX)) {
+    const attachment = normalizeAttachment(item);
+    if (attachment === null || seen.has(attachment.sha256)) continue;
+    seen.add(attachment.sha256);
+    out.push(attachment);
+  }
+  return out;
+}
+
 function normalizeUsage(raw) {
   const usage = {};
   for (const key of USAGE_KEYS) usage[key] = isObject(raw) && typeof raw[key] === "number" && Number.isFinite(raw[key]) ? raw[key] : null;
@@ -146,6 +198,7 @@ function normalizeV2(raw) {
       ? raw.approvals.filter((a) => isObject(a) && typeof a.id === "string").map((a) => ({ id: clip(a.id, 64), kind: strOrNull(a.kind, 64), subject: strOrNull(a.subject, 16), at: strOrNull(a.at, 40) }))
       : [],
     usage: normalizeUsage(raw.usage),
+    attachments: normalizeAttachments(raw.attachments),
     createdAt: strOrNull(raw.createdAt, 40),
     updatedAt: strOrNull(raw.updatedAt, 40),
     archivedAt: strOrNull(raw.archivedAt, 40),
@@ -566,6 +619,12 @@ function mutate(repoKey, idOrPrefix, options, work) {
     return work({ dir, record: state.record, id });
   });
 }
+
+/**
+ * For attachments.mjs: run `work({dir, record, id})` under the session lock on an up-to-date record, and append one event with
+ * `commitSessionEvent(dir, record, {type, patch, ...}, options)`. Same guarantees as every other writer here.
+ */
+export { mutate as mutateSession, commit as commitSessionEvent };
 
 /** Archive a session (idempotent). `changed` tells whether this call did it. */
 export function archiveSession(repoKey, idOrPrefix, options = {}) {

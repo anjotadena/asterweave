@@ -14,6 +14,7 @@ import { EXIT, UsageError } from "../exit-codes.mjs";
 import { createTerminal } from "../tui/terminal.mjs";
 import { authCommand, authCommandMeta } from "./auth.mjs";
 import { configCommand, configCommandMeta } from "./config.mjs";
+import { contextCommand, contextCommandMeta } from "./context.mjs";
 import { doctorCommand, doctorCommandMeta } from "./doctor.mjs";
 import { COMMAND_HELP, helpCommand, helpCommandMeta } from "./help.mjs";
 import { hookCommand, hookCommandMeta } from "./hook.mjs";
@@ -74,6 +75,7 @@ export function registerAllCommands(registry, { loadLaunch } = {}) {
   add("run", runCommand, runCommandMeta);
   add("session", sessionCommand, sessionCommandMeta);
   add("pipeline", pipelineCommand, pipelineCommandMeta);
+  add("context", contextCommand, contextCommandMeta);
   add("usage", usageCommand, usageCommandMeta);
   add("model", modelCommand, modelCommandMeta);
   add("mcp", mcpCommand, mcpCommandMeta);

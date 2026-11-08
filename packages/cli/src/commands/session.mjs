@@ -19,17 +19,19 @@ import { cleanApply, cleanPlan, resumeSession } from "../runtime/session-maint.m
 import { archiveSession, createSession, forkSession, listSessions, loadSession, searchSessions } from "../runtime/sessions.mjs";
 import { askYesNo, withTerminal } from "../tui/session.mjs";
 import { createTerminal } from "../tui/terminal.mjs";
+import { attachInspected, attachmentViews, imagePaths, inspectAll, storeProblemError } from "./images.mjs";
 import { resolveRepo } from "./run.mjs";
+import { attachCommand, attachmentLines, detachCommand } from "./session-images.mjs";
 import { isInteractive, seams, stringOption } from "./shared.mjs";
 
 export const sessionCommandMeta = Object.freeze({
   summary: "List, start, resume, fork, archive and clean sessions",
   boolean: ["json", "all", "yes"],
-  options: ["json", "all", "yes", "title", "worktree", "run", "older-than"],
+  options: ["json", "all", "yes", "title", "worktree", "run", "older-than", "image"],
 });
 
 const USAGE =
-  "Usage: asterweave session list [--all] [--json] | show <id> [--json] | search <text> [--json] | start [--title t] [--worktree name] [--run [runId]] [--json] | resume <id> [--json] | fork <id> [--title t] [--json] | archive <id> [--json] | clean [--older-than days] [--yes] [--json] | transcript <id> [--json]";
+  "Usage: asterweave session list [--all] [--json] | show <id> [--json] | search <text> [--json] | start [--title t] [--worktree name] [--run [runId]] [--image path]... [--json] | attach <id> <path>... [--json] | detach <id> <attachmentId> [--yes] [--json] | resume <id> [--json] | fork <id> [--title t] [--json] | archive <id> [--json] | clean [--older-than days] [--yes] [--json] | transcript <id> [--json]";
 
 export const sessionHelpText = `${[
   "asterweave session - sessions: a repository workspace (and worktree, run) with a title and checkpoints",
@@ -41,6 +43,9 @@ export const sessionHelpText = `${[
   "  search      case-insensitive text search over title, branch, goal, run id and id (literal text, not a pattern)",
   "  start       record a new session for this repository (no runner is started); --worktree creates an isolated worktree",
   "              first, --run links the newest run (or the given run id)",
+  "  attach      store image copies (PNG, JPEG or WebP; EXIF/XMP/text metadata stripped) in a session; start --image does the same. Nothing is sent",
+  "              until `run start --session <id>` sends the not-yet-sent images with its first turn (see the images docs page)",
+  "  detach      remove one attached image (its stored copy) after a preview; needs --yes without a terminal. Refused while a run that used it is open",
   "  resume      check that the session can continue and print the exact next command; changes nothing else",
   "  fork        a new session from an existing one: checkpoints up to the last verified one, no provider session id",
   "  archive     mark a session archived (idempotent)",
@@ -57,10 +62,13 @@ export const sessionHelpText = `${[
   "  list        { ok, sessions: [{ id, title, status, branch, runId, node, parentSessionId, worktree, checkpoints, createdAt, updatedAt, archivedAt }], problems: [{ id, error, message }], truncated }",
   "  show        { ok, session: { schemaVersion, id, repoKey, workspace, branch, worktree: { path, branch, base, created } | null, providerSessionId, runId, node,",
   "                parentSessionId, goal, title, status, checkpoints: [{ at, runId, node, seq, note }], approvals: [{ id, kind, subject, at }],",
-  "                usage: { tokens, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens }, createdAt, updatedAt, archivedAt, lastSeq }, notes, behind }",
+  "                usage: { tokens, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens }, attachments: [<attachment>], createdAt, updatedAt, archivedAt, lastSeq }, notes, behind }",
   "              (null = unknown or not set; usage numbers are copies of measured totals)",
   "  search      { ok, query, results: [<list row> + matched: [field]], truncated }",
-  "  start       { ok, session, worktree: { path, branch, created } | null }",
+  "  start       { ok, session, worktree: { path, branch, created } | null, attachments?: [<attachment>] }   (attachments only with --image)",
+  "  attach      { ok, sessionId, attachments: [<attachment>], duplicates: [id] }   <attachment> = { id, sha256, format, mime, bytes, width, height, name,",
+  "                metadataStripped, dropped: [kind], sentRunId }   (hashes and sizes only: image bytes are never printed)",
+  "  detach      { ok, removed, sessionId, attachment }",
   "  resume      { ok, plan: { ok, problems: [{ code, message, remediation }], sessionId, runId, node, needsReconcile, workspace, cwd, branch, checks }, nextCommand }",
   "              (cwd = the directory to work in: the worktree path when the session has a worktree, else the workspace)",
   "              (when plan.ok is false: ok is false, an error object is included, exit 1)",
@@ -75,7 +83,9 @@ const FLAGS = {
   list: ["json", "all"],
   show: ["json"],
   search: ["json"],
-  start: ["json", "title", "worktree", "run"],
+  start: ["json", "title", "worktree", "run", "image"],
+  attach: ["json"],
+  detach: ["json", "yes"],
   resume: ["json"],
   fork: ["json", "title"],
   archive: ["json"],
@@ -176,6 +186,7 @@ async function showCommand(ctx) {
     ...session.checkpoints.map((c) => `  #${c.seq ?? "?"} ${c.runId ?? "-"}/${c.node ?? "-"} ${when(c.at)}${c.note ? `  ${c.note}` : ""}`),
     `Approvals (${session.approvals.length}, references only)`,
     ...session.approvals.map((a) => `  ${a.id} ${a.kind ?? ""} ${a.subject ?? ""}`),
+    ...attachmentLines(session),
     ...notes.map((n) => `Note: ${n}`),
   ];
   write(ctx.stdout, `${sanitizeLines(lines)}\n`);
@@ -204,6 +215,7 @@ async function startCommand(ctx) {
   const title = stringOption(ctx, "title", USAGE);
   const name = stringOption(ctx, "worktree", USAGE);
   const runFlag = ctx.options?.run;
+  const inspectedImages = inspectAll(imagePaths(ctx, USAGE), ctx); // every file is validated before a worktree or a session exists
   if (typeof runFlag === "string" && !isValidRunId(runFlag)) throw new UsageError("--run needs a run id (or no value for the newest run).", { remediation: USAGE });
   const repo = await resolveRepo(ctx);
   const options = storeOptions(ctx);
@@ -247,11 +259,16 @@ async function startCommand(ctx) {
     if (worktree) throw new CliError(`The worktree was created at ${safe(worktree.path)} but the session could not be recorded: ${safe(error.message)}`, { code: error.code ?? "SESSION_CREATE_FAILED", remediation: "The worktree was kept; remove it yourself if you do not need it." });
     throw error;
   }
-  if (json(ctx)) write(ctx.stdout, `${stringifyJson({ ok: true, session: created.session, worktree: worktree ? { path: worktree.path, branch: worktree.branch, created: true } : null })}\n`);
+  const attached = inspectedImages.length > 0 ? attachInspected(created.session.id, inspectedImages, ctx, repo.key) : { attachments: [], duplicates: [], problem: null };
+  // all or nothing: a failed attach leaves the session without images and is ONE error envelope (never a success document first)
+  if (attached.problem) throw storeProblemError(attached.problem, `The session ${created.session.id} was recorded without images; attach them later with: asterweave session attach ${created.session.id} <path>`);
+  const finalSession = attached.attachments.length > 0 ? loadSession(repo.key, created.session.id, readOnly(ctx)).session : created.session;
+  if (json(ctx)) write(ctx.stdout, `${stringifyJson({ ok: true, session: finalSession, worktree: worktree ? { path: worktree.path, branch: worktree.branch, created: true } : null, ...(inspectedImages.length > 0 ? { attachments: attachmentViews(attached.attachments) } : {}) })}\n`);
   else {
     const lines = [`Started session ${created.session.id}${created.session.title ? ` "${created.session.title}"` : ""}`, `Workspace ${created.session.workspace}`];
     if (worktree) lines.push(`Worktree  ${worktree.path} (${worktree.branch ?? "no branch"})`);
     if (run) lines.push(`Linked run ${run.runId}`);
+    if (attached.attachments.length > 0) lines.push(...attachmentLines(finalSession).slice(0, 1 + attached.attachments.length), "Stored copies have metadata stripped; nothing is sent until a run starts with this session.");
     lines.push("No runner is started by this command.");
     write(ctx.stdout, `${sanitizeLines(lines)}\n`);
   }
@@ -428,6 +445,9 @@ async function transcriptCommand(ctx) {
   return EXIT.OK;
 }
 
+// What session-images.mjs needs from this file.
+const imageKit = { check, USAGE, resolveRepo, readOnly, write, json, confirm, isInteractive };
+
 /** Handler for `asterweave session ...`. */
 export async function sessionCommand(ctx) {
   const sub = (ctx.positionals ?? [])[0];
@@ -441,6 +461,10 @@ export async function sessionCommand(ctx) {
       return searchCommand(ctx);
     case "start":
       return startCommand(ctx);
+    case "attach":
+      return attachCommand(ctx, imageKit);
+    case "detach":
+      return detachCommand(ctx, imageKit);
     case "resume":
       return resumeCommand(ctx);
     case "fork":

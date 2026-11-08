@@ -1,12 +1,40 @@
 // The working session: composer, slash/@ completion overlays and an in-memory transcript.
 // Phase A has no agent loop: nothing the user types is sent anywhere, no process is spawned, and
 // nothing is persisted. Typed text lives only in this module's memory and on the screen.
+// The one exception is the read-only /context, /usage, /attachments and /image views: they call the `views` seam
+// (see commands/context.mjs), never a model. /image stages a copy of an image in the session store; nothing is sent.
 
+import { sanitizeForTerminal } from "../redact.mjs";
+import { buildAccountingView, formatAccountingCompact, formatUsageCompact } from "../runtime/usage-view.mjs";
 import { createInput } from "./input.mjs";
 import { NOT_AVAILABLE, SLASH_COMMANDS, renderSessionScreen } from "./screens.mjs";
 
 const TRANSCRIPT_LIMIT = 500;
-const STUBS = new Set(["/sessions", "/usage", "/settings", "/context"]);
+const STUBS = new Set(["/sessions", "/settings"]);
+const VIEW_COMMANDS = Object.freeze({ "/context": "context", "/usage": "usage", "/attachments": "attachments", "/image": "image" });
+const VIEW_MAX_LINES = 40;
+const VIEW_MAX_COLUMNS = 400;
+const IMAGE_USAGE = "Usage: /image <path>   (stages a copy for the next run; nothing is sent now)";
+const NO_SESSION = ["There is no active session to attach images to.", "Create one with: asterweave session start"];
+
+/** Views used when none are injected (no repository, run or session): honest, all unknown. */
+const DEFAULT_VIEWS = Object.freeze({
+  context: () => formatAccountingCompact(buildAccountingView({})),
+  usage: () => formatUsageCompact(buildAccountingView({})),
+  attachments: () => NO_SESSION,
+  image: () => NO_SESSION,
+});
+
+/** Sanitised, bounded lines from a view (a view that returns anything else shows nothing). */
+function boundLines(lines) {
+  const list = Array.isArray(lines) ? lines : [];
+  const shown = list.slice(0, VIEW_MAX_LINES).map((line) => sanitizeForTerminal(String(line)).slice(0, VIEW_MAX_COLUMNS));
+  if (list.length > VIEW_MAX_LINES) shown.push(`... ${list.length - VIEW_MAX_LINES} more line(s) not shown`);
+  return shown;
+}
+
+const QUOTES = ['"', "'"];
+const unquote = (text) => (text.length >= 2 && QUOTES.includes(text[0]) && text.at(-1) === text[0] ? text.slice(1, -1) : text);
 
 /**
  * Enter the terminal for the duration of `fn` and ALWAYS restore it: normal return, Ctrl+C, SIGINT,
@@ -126,7 +154,7 @@ export function askYesNo({ input, signal }) {
 
 const commandLines = () => [
   "Commands:",
-  ...SLASH_COMMANDS.map(({ name, hint }) => `  ${name.padEnd(10)} ${hint}`),
+  ...SLASH_COMMANDS.map(({ name, hint }) => `  ${name.padEnd(13)} ${hint}`),
   "Type @ to add context (e.g. @repo).",
 ];
 
@@ -134,13 +162,16 @@ const commandLines = () => [
  * @param {{
  *   terminal: any, input: ReturnType<typeof createInput>, style?: object, version?: string,
  *   repo?: string, branch?: string, banner?: string[],
+ *   views?: {context?: () => any, usage?: () => any, attachments?: () => any, image?: (path: string) => any},
  * }} options
+ *   `views` return arrays of lines (or a promise of them); they are read-only and never call a model.
  *   `repo` is `owner/name`; the `@` overlay offers `@name` and nothing else.
  * @returns {{run(): Promise<number>, interrupt(): void, transcript: string[]}}
  *   `run` resolves 0 for /exit, Ctrl-D on an empty composer or a closed input, 130 for Ctrl+C; it rejects if rendering
  *   or key handling throws (the caller's `finally` restores the terminal).
  */
-export function createSession({ terminal, input, style, version, repo, branch, banner = [] }) {
+export function createSession({ terminal, input, style, version, repo, branch, banner = [], views = {} }) {
+  const viewOf = { ...DEFAULT_VIEWS, ...views };
   const repoName = repo ? repo.split("/").pop() : "";
   const contextItems = repoName ? [{ name: `@${repoName}`, hint: "connected repository" }] : [];
   const transcript = [];
@@ -148,6 +179,9 @@ export function createSession({ terminal, input, style, version, repo, branch, b
   let cursor = 0;
   let overlay = null; // {kind: 'slash'|'at', items: [{name, hint}], index, start}
   let stop = () => {};
+  let fail = () => {};
+  let closed = false;
+  let pending = Promise.resolve(); // view results are appended in the order the commands were typed
 
   const push = (...lines) => {
     transcript.push(...lines);
@@ -185,6 +219,25 @@ export function createSession({ terminal, input, style, version, repo, branch, b
     overlay = null;
   };
 
+  /** Run a read-only view, then append its (sanitised, bounded) lines and redraw. Never throws into the key handler. */
+  const runView = (name, argument) => {
+    pending = pending.then(async () => {
+      let lines;
+      try {
+        lines = await viewOf[name](argument);
+      } catch {
+        lines = ["That view could not be read."];
+      }
+      if (closed) return;
+      push(...boundLines(lines));
+      try {
+        draw();
+      } catch (error) {
+        fail(error);
+      }
+    });
+  };
+
   /** Run the composer line. Returns an exit code when the session should end. */
   const submit = () => {
     const line = buffer.join("").trim();
@@ -200,7 +253,11 @@ export function createSession({ terminal, input, style, version, repo, branch, b
     const word = line.split(/\s+/)[0].toLowerCase();
     if (word === "/exit") return 0;
     if (word === "/help" || word === "/commands") push(...commandLines());
-    else if (STUBS.has(word)) push(NOT_AVAILABLE);
+    else if (Object.hasOwn(VIEW_COMMANDS, word)) {
+      const argument = unquote(line.slice(word.length).trim()).slice(0, 1000);
+      if (word === "/image" && argument === "") push(IMAGE_USAGE);
+      else runView(VIEW_COMMANDS[word], argument);
+    } else if (STUBS.has(word)) push(NOT_AVAILABLE);
     else push(`Unknown command ${word}. Type /help for the command list.`);
     return undefined;
   };
@@ -265,12 +322,14 @@ export function createSession({ terminal, input, style, version, repo, branch, b
         const settle = (code, error) => {
           if (settled) return;
           settled = true;
+          closed = true;
           offKey();
           offResize();
           if (error) reject(error);
           else resolve(code);
         };
         stop = (code) => settle(code);
+        fail = (error) => settle(undefined, error);
         const guarded = (fn) => (...args) => {
           try {
             fn(...args);

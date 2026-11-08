@@ -24,7 +24,8 @@ import { seams } from "./shared.mjs";
 export const usageCommandMeta = Object.freeze({ summary: "Show token usage and budgets of a run (read-only)", boolean: ["json"], options: ["json"] });
 const USAGE = "Usage: asterweave usage [runId] [--json]";
 
-function limitsOf(ctx) {
+/** The run and per-node budget limits of the current policy (defaults when the policy cannot be read). */
+export function limitsOf(ctx) {
   try {
     const { policy } = loadPolicy(seams(ctx));
     return { run: resolveBudgets(policy), node: resolveNodeBudgets(policy) };

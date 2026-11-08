@@ -58,8 +58,8 @@ function world() {
 }
 
 test("meta: options are the union; help text documents every subcommand and the JSON shapes", () => {
-  assert.deepEqual(sessionCommandMeta.options, ["json", "all", "yes", "title", "worktree", "run", "older-than"]);
-  for (const sub of ["list", "show", "search", "start", "resume", "fork", "archive", "clean", "transcript"]) assert.match(sessionHelpText, new RegExp(`\\n  ${sub} `));
+  assert.deepEqual(sessionCommandMeta.options, ["json", "all", "yes", "title", "worktree", "run", "older-than", "image"]);
+  for (const sub of ["list", "show", "search", "start", "resume", "fork", "archive", "clean", "transcript", "attach", "detach"]) assert.match(sessionHelpText, new RegExp(`\\n  ${sub} `));
   assert.match(sessionHelpText, /JSON \(stable\)/);
 });
 
