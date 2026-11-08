@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "start": "node packages/cli/bin/asterweave.mjs",
+    "dev": "node --watch packages/cli/bin/asterweave.mjs",
     "test": "node plugins/asterweave/scripts/run-tests.mjs",
     "test:cli": "node packages/cli/scripts/run-tests.mjs",
     "demo:hris-014": "node packages/cli/scripts/demo-hris-014.mjs",
