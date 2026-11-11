@@ -6,7 +6,7 @@
 //   run approve <runId> [--approval <id> --subject <hash> --nonce <code>] [--json]   answer y/N on a terminal, or quote the nonce
 //   run abort <runId> [--yes] [--json]                          stop a run for good (idempotent)
 //
-//   run start <goal> [--workflow delivery|bugfix] [--session id] [--runner claude|fake] [--worktree name] [--json]   (Claude runner: runner.md)
+//   run start <goal> [--workflow delivery|bugfix|contribute|audit|auto] [--session id] [--runner claude|fake] [--worktree name] [--json]   (Claude runner: runner.md)
 //   run resume <runId> [--json]
 //
 // DEVELOPMENT ONLY (accepted only when ASTERWEAVE_DEV_EXECUTORS=1, otherwise exit 2 "not available"): the scripted fake executor
@@ -42,6 +42,7 @@ import { DISPLAY_LIMIT, assertHumanContext, displayProblem, displayTarget, faile
 import { simulatedDispatcher } from "../runtime/executor.mjs";
 import { createFakeExecutor, loadScript } from "../runtime/fake-executor.mjs";
 import { GraphError, getGraph, graphHash } from "../runtime/graph.mjs";
+import { describeContribution, initContribution, loadContribution } from "../runtime/contribution.mjs";
 import "../runtime/graphs/index.mjs";
 import { loadHooks } from "../runtime/hooks.mjs";
 import { isValidRunId, listRuns, loadRun, repairTail, runDir } from "../runtime/ledger.mjs";
@@ -63,7 +64,7 @@ export const runCommandMeta = Object.freeze({
   options: ["json", "yes", "approval", "subject", "nonce", "executor", "script", "graph", "goal", "run-id", "workflow", "session", "runner", "worktree", "image"],
 });
 
-const PUBLIC_USAGE = "Usage: asterweave run start <goal> [--workflow delivery|bugfix] [--session <id>] [--worktree <name>] [--image <path>]... | run resume <runId> | run show [runId] [--json] | run approve <runId> [--approval <id> --subject <hash> --nonce <code>] | run abort <runId> [--yes]";
+const PUBLIC_USAGE = "Usage: asterweave run start <goal> [--workflow delivery|bugfix|contribute|audit|auto] [--session <id>] [--worktree <name>] [--image <path>]... | run resume <runId> | run show [runId] [--json] | run approve <runId> [--approval <id> --subject <hash> --nonce <code>] | run abort <runId> [--yes]";
 const SUBJECT_SHOWN = 12;
 const GOAL_LINE = 400;
 const HIDDEN_SUBJECT = "hidden inside a run";
@@ -326,7 +327,23 @@ export function describeRun(ctx, dir, view) {
     lock: lockInfo(dir, ctx),
     policy: info,
     attention: attentionOf(run, loaded.events),
+    ...contributionField(dir, run), // only present for contribution runs: other runs keep their exact shape
   };
+}
+
+/** Skill, task, stage, findings, verification, remote references, blockers and next action of a contribution run; null for other runs. */
+function contributionField(dir, run) {
+  const view = contributionView(dir, run);
+  return view === null ? {} : { contribution: view };
+}
+
+function contributionView(dir, run) {
+  try {
+    const state = loadContribution(dir);
+    return state === null ? null : describeContribution(state, run);
+  } catch (error) {
+    return { error: String(error?.code ?? "CONTRIBUTION_UNREADABLE") };
+  }
 }
 
 const formatMs = (ms) => {
@@ -376,6 +393,17 @@ export function formatRun(view) {
     `  tokens      ${budgets.tokens.available ? of(budgets.tokens) : "unavailable"}`,
     `  wall time   ${formatMs(budgets.wallMs.used)}${budgets.wallMs.limit ? ` / ${formatMs(budgets.wallMs.limit)}` : ""}`,
   );
+  if (view.contribution) {
+    const c = view.contribution;
+    if (c.error) lines.push("", `Contribution  unavailable (${c.error})`);
+    else {
+      lines.push("", "Contribution", `  skill       ${c.skill} via ${c.workflow}, scope ${c.scope}`, `  task        ${c.task ?? "none recorded"}`, `  stage       ${c.stage ?? "none"} (${c.stagesPassed} stages passed)`);
+      lines.push(`  findings    ${c.findings.total} recorded${c.findings.ledgerEvidence ? `, ${c.findings.ledgerEvidence} finding evidence item(s) in the ledger` : ""}${c.findings.total ? ` (${["suspected", "reproduced", "fixed-locally", "verified", "blocked"].filter((s) => c.findings[s]).map((s) => `${c.findings[s]} ${s}`).join(", ")})` : ""}`);
+      lines.push(`  verification ${c.verification.length ? c.verification.map((v) => `${v.stage} ${v.status}`).join(", ") : "not reached"}`);
+      for (const r of c.remote) lines.push(`  remote      ${r.operation} ${r.target}: ${r.status}${r.id ? ` (${r.id})` : ""}`);
+      lines.push(`  blocked     ${c.blocked ? "yes" : "no"}`, `  next        ${c.next}`, "  not recorded by the ledger: active agent, current tool, changed files");
+    }
+  }
   if (view.attention) {
     const a = view.attention;
     lines.push("", `Attention  ${a.decision} ${a.reason} (${a.ruleId})${a.node ? ` at ${a.node}` : ""}`, ...(a.message ? [`           ${a.message.replace(/\s+/g, " ")}`] : []));
@@ -711,7 +739,7 @@ async function startRun(ctx, rest, deps) {
     ctx = { ...ctx, options: { ...ctx.options, goal: rest[0] } }; // `run start <goal> --runner fake --script f`
     rest = [];
   }
-  const remediation = "Usage: asterweave run start <goal> [--workflow delivery|bugfix] [--session <id>] [--worktree <name>] [--json]";
+  const remediation = "Usage: asterweave run start <goal> [--workflow delivery|bugfix|contribute|audit|auto] [--session <id>] [--worktree <name>] [--json]";
   if (rest.length > 0) throw new UsageError(`Unexpected argument '${sanitizeForTerminal(rest[0]).slice(0, 40)}'.`, { remediation });
   const executor = requireFake(ctx, remediation);
   const graphName = stringOption(ctx, "graph", remediation) ?? "delivery@1";
@@ -729,6 +757,8 @@ async function startRun(ctx, rest, deps) {
   const hooks = loadHooks({ ...seams(ctx), repoPath: repo.workspace });
   const branch = await currentBranch(ctx, repo.workspace);
   const created = createRunForGraph({ graph, goal, repo: { key: repo.key, realpath: repo.workspace }, runId, policyHash: policy.policyHash, routing, ...seams(ctx) });
+  const recorded = { audit: ["repo-audit", "discovery"], contribute: ["contribute", "implement"], bugfix: ["bug-fix", "implement"] }[graph.id];
+  if (recorded) initContribution(created.dir, { skill: recorded[0], workflow: graph.id, objective: goal, level: recorded[1] });
   return drive(ctx, { ...deps, dir: created.dir, graph, executor, policy, hooks, repo, branch, run: created.run });
 }
 

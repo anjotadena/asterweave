@@ -9,6 +9,7 @@
     "test": "node plugins/asterweave/scripts/run-tests.mjs",
     "test:cli": "node packages/cli/scripts/run-tests.mjs",
     "demo:hris-014": "node packages/cli/scripts/demo-hris-014.mjs",
+    "demo:contribute": "node packages/cli/scripts/demo-contribute.mjs",
     "validate": "node plugins/asterweave/scripts/validate-plugin.mjs plugins/asterweave",
     "check": "npm run validate && npm test && npm run test:cli"
   },

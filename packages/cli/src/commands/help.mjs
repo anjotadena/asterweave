@@ -5,6 +5,7 @@ import { EXIT, UsageError } from "../exit-codes.mjs";
 import { contextHelpText } from "./context.mjs";
 import { mcpHelpText } from "./mcp.mjs";
 import { pluginHelpText } from "./plugin.mjs";
+import { skillHelpText } from "./skill.mjs";
 import { pipelineHelpText } from "./pipeline.mjs";
 import { sessionHelpText } from "./session.mjs";
 
@@ -119,7 +120,7 @@ export const COMMAND_HELP = Object.freeze({
   run: block([
     "asterweave run - start, resume, inspect, approve or abort a run",
     "",
-    "Usage: asterweave run start <goal> [--workflow delivery|bugfix] [--session <id>] [--worktree <name>] [--image <path>]... [--runner claude] [--json]",
+    "Usage: asterweave run start <goal> [--workflow delivery|bugfix|contribute|audit|auto] [--session <id>] [--worktree <name>] [--image <path>]... [--runner claude] [--json]",
     "       asterweave run resume <runId> [--json]",
     "       asterweave run show [runId] [--json]",
     "       asterweave run approve <runId> [--approval <id> --subject <hash> --nonce <code>] [--json]",
@@ -187,6 +188,7 @@ export const COMMAND_HELP = Object.freeze({
   mcp: block(mcpHelpText.split("\n")),
   session: block(sessionHelpText.trimEnd().split("\n")),
   plugin: block(pluginHelpText.trimEnd().split("\n")),
+  skill: block(skillHelpText.trimEnd().split("\n")),
   context: block(contextHelpText.trimEnd().split("\n")),
   pipeline: block(pipelineHelpText.trimEnd().split("\n")),
   trust: block([

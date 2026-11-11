@@ -25,6 +25,7 @@ import { modelCommand, modelCommandMeta } from "./model.mjs";
 import { pluginCommand, pluginCommandMeta } from "./plugin.mjs";
 import { runCommand, runCommandMeta } from "./run.mjs";
 import { sessionCommand, sessionCommandMeta } from "./session.mjs";
+import { skillCommand, skillCommandMeta } from "./skill.mjs";
 import { trustCommand, trustCommandMeta } from "./trust.mjs";
 import { usageCommand, usageCommandMeta } from "./usage.mjs";
 
@@ -78,6 +79,7 @@ export function registerAllCommands(registry, { loadLaunch } = {}) {
   add("pipeline", pipelineCommand, pipelineCommandMeta);
   add("context", contextCommand, contextCommandMeta);
   add("plugin", pluginCommand, pluginCommandMeta);
+  add("skill", skillCommand, skillCommandMeta);
   add("usage", usageCommand, usageCommandMeta);
   add("model", modelCommand, modelCommandMeta);
   add("mcp", mcpCommand, mcpCommandMeta);

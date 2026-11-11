@@ -152,6 +152,7 @@ Run `/asterweave:scaffold` when adopting a repository or when its architecture/t
 | `/asterweave:daily` | Triage assigned work, read-only |
 | `/asterweave:doctor` | Diagnose plugin/repository health |
 | `asterweave` (CLI, preview) | Standalone terminal CLI: GitHub sign-in, repository connect, `doctor`, `config`, `trust` — run from `packages/cli`; no agent loop yet |
+| `asterweave skill list|show|route` (CLI, preview) | Discover, inspect and route the contribution skills; `run start --workflow auto|contribute|audit` |
 | `asterweave run show\|approve\|abort` (CLI, preview) | Inspect, approve or abort a persisted workflow run (graphs, guard, approvals, hooks). Phase B is simulated: no model calls and no real tool execution; starting a run is a hidden development command |
 
 **[Complete command reference →](https://anjotadena.github.io/asterweave/commands/overview)**
@@ -165,7 +166,7 @@ Run `/asterweave:scaffold` when adopting a repository or when its architecture/t
 
 ## What's included
 
-- **18 workflow skills** under the `/asterweave:` namespace.
+- **26 workflow skills** (including `contribute`, `repo-audit`, `issue-triage`, `bug-fix`, `feature-implement`, `test-verify`, `pr-review`, `pr-prepare`; see [docs/contribution-skills.md](docs/contribution-skills.md)) under the `/asterweave:` namespace.
 - **13 specialist agents**, least-privilege by design — read-only analyzers/reviewers, write-capable implementers/testers.
 - **GitHub MCP** for issues, PRs, CI checks, and review comments, with an **optional Azure DevOps MCP** for organizations tracking work in Azure Boards instead.
 - **Deterministic hooks**: a destructive-command guard that also asks before pushes to `main`/`master`, an auto-continue stop gate for active runs, a per-workstream ownership guard for parallel completion runs, and an opt-in context-budget handoff reminder.

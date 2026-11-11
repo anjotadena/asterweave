@@ -33,6 +33,34 @@ function parseJson(file, errors) {
   }
 }
 
+// Versioned skill metadata. Skills without `asterweave-skill` (legacy definitions) are not checked here.
+const EXTENDED_KEYS = {
+  1: ["triggers", "inputs", "outputs", "capabilities", "verification", "stop-when", "follow-ups"],
+};
+const KEBAB = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const list = (value) => String(value || "").split(",").map((item) => item.trim()).filter(Boolean);
+
+function validateExtendedSkills(extended, skillNames, errors) {
+  const claimed = new Map([...skillNames].map((name) => [name, name]));
+  for (const { name, file, frontmatter } of extended) {
+    const version = frontmatter["asterweave-skill"];
+    if (!Object.hasOwn(EXTENDED_KEYS, version)) {
+      errors.push(`${file}: unsupported asterweave-skill version ${version}`);
+      continue;
+    }
+    for (const key of EXTENDED_KEYS[version]) if (!frontmatter[key]) errors.push(`${file}: missing ${key}`);
+    for (const alias of list(frontmatter.aliases)) {
+      if (!KEBAB.test(alias)) errors.push(`${file}: alias ${alias} must be kebab-case`);
+      else if (claimed.has(alias) && claimed.get(alias) !== name) errors.push(`${file}: alias ${alias} already belongs to ${claimed.get(alias)}`);
+      else claimed.set(alias, name);
+    }
+    for (const next of list(frontmatter["follow-ups"])) {
+      if (!skillNames.has(next)) errors.push(`${file}: follow-up ${next} is not a skill`);
+      if (next === name) errors.push(`${file}: follow-up ${next} is the skill itself`);
+    }
+  }
+}
+
 export function validatePlugin(rootInput) {
   const root = resolve(rootInput);
   const errors = [];
@@ -59,6 +87,7 @@ export function validatePlugin(rootInput) {
   for (const jsonFile of walk(root).filter((file) => file.endsWith(".json"))) parseJson(jsonFile, errors);
 
   const skillNames = new Set();
+  const extended = [];
   const skillRoot = join(root, "skills");
   if (existsSync(skillRoot)) {
     for (const directory of readdirSync(skillRoot)) {
@@ -74,12 +103,17 @@ export function validatePlugin(rootInput) {
         if (!frontmatter.description) errors.push(`${relative(root, skillFile)}: missing description`);
         if (skillNames.has(frontmatter.name)) errors.push(`Duplicate skill name: ${frontmatter.name}`);
         skillNames.add(frontmatter.name);
+        if (frontmatter["asterweave-skill"] !== undefined) {
+          extended.push({ name: frontmatter.name, file: relative(root, skillFile), frontmatter });
+        }
       } catch (error) {
         errors.push(error.message);
       }
       if (/\b(?:TODO|TBD|YOUR_GITHUB_PAT)\b/.test(content)) errors.push(`${relative(root, skillFile)}: unresolved placeholder`);
     }
   }
+
+  validateExtendedSkills(extended, skillNames, errors);
 
   const agentNames = new Set();
   const agentRoot = join(root, "agents");

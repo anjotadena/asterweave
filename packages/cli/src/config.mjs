@@ -36,6 +36,7 @@ export const PRECEDENCE = Object.freeze(["default", "user", "repo", "env", "flag
 
 const HOST = HOST_PATTERN;
 const WORK_ITEM_PROVIDERS = ["github", "azure-devops", "none"];
+const MEMORY_SCOPES = ["user", "repository", "session"];
 
 /**
  * @typedef {object} KeyDefinition
@@ -67,6 +68,19 @@ export const KNOWN_KEYS = Object.freeze({
   "model.fallback": { type: "modelList", default: null, env: "ASTERWEAVE_MODEL_FALLBACK", description: `Comma-separated model ids to fall back to on transient failures (at most ${MAX_FALLBACK}).` },
   ...Object.fromEntries(STAGE_NODES.map((node) => [`model.stages.${node}`, { type: "string", pattern: MODEL_ID_PATTERN, default: null, env: stageEnv(node), description: `Model id for the '${node}' stage (overrides model.default).` }])),
   "qualityGates.required": { type: "gates", default: [], repo: true, executable: true, userSettable: false, description: "Quality-gate commands from the repository adapter. EXECUTABLE: applied only when the repository is trusted." },
+  // Conversation memory (runtime/memory). USER CONFIG AND ENVIRONMENT ONLY: no key here has `repo: true`, and the repository adapter schema
+  // has no 'memory' property, so a repository can neither raise retention nor switch on import / semantic services. The two service
+  // switches have no environment variable either (a repository's own tooling often controls the environment).
+  "memory.enabled": { type: "boolean", default: true, env: "ASTERWEAVE_MEMORY_ENABLED", description: "Capture conversation history into the local memory store. false stops FUTURE capture only; stored data is kept (delete it with 'memory forget')." },
+  "memory.defaultScope": { type: "enum", values: MEMORY_SCOPES, default: "repository", env: "ASTERWEAVE_MEMORY_DEFAULT_SCOPE", description: "Default scope of a new memory item: user, repository or session." },
+  "memory.historyRetentionDays": { type: "integer", min: 1, max: 3650, default: 365, env: "ASTERWEAVE_MEMORY_HISTORY_RETENTION_DAYS", description: "Days a captured event is kept, counted from its event time (never renewed by reading or searching)." },
+  "memory.summaryRetentionDays": { type: "integer", min: 1, max: 3650, default: 365, env: "ASTERWEAVE_MEMORY_SUMMARY_RETENTION_DAYS", description: "Days a checkpoint summary or unconfirmed memory item is kept (confirmed items are durable until forgotten)." },
+  "memory.idleRefreshMinutes": { type: "integer", min: 1, max: 1440, default: 15, env: "ASTERWEAVE_MEMORY_IDLE_REFRESH_MINUTES", description: "Idle minutes after which a session's working context is refreshed (used by the context builder)." },
+  "memory.coldResumeMinutes": { type: "integer", min: 1, max: 10080, default: 60, env: "ASTERWEAVE_MEMORY_COLD_RESUME_MINUTES", description: "Idle minutes after which a resumed session is treated as a cold resume. Must be at least memory.idleRefreshMinutes." },
+  "memory.contextTokenBudget": { type: "integer", min: 256, max: 200000, default: 4000, env: "ASTERWEAVE_MEMORY_CONTEXT_TOKEN_BUDGET", description: "Token budget for memory injected into a request (used by the context builder)." },
+  "memory.retrievalLimit": { type: "integer", min: 1, max: 50, default: 8, env: "ASTERWEAVE_MEMORY_RETRIEVAL_LIMIT", description: "Most memory items or events returned to a request by retrieval." },
+  "memory.semanticSearchEnabled": { type: "boolean", default: false, description: "Allow an optional semantic retriever to rank memory. Off by default; user config only." },
+  "memory.claudeImportEnabled": { type: "boolean", default: false, description: "Allow importing Claude Code transcripts into memory. Off by default; user config only." },
 });
 
 /** Environment variable name for each key that has one: { 'github.host': 'ASTERWEAVE_GITHUB_HOST', ... }. */
@@ -337,6 +351,7 @@ export function resolveConfig(options = {}) {
     entries[key] = { value: coerceValue(key, raw, { origin: "flag", fromString: typeof raw === "string" }), origin: "flag" };
   }
 
+  validateMemoryConflicts(entries);
   return { precedence: [...PRECEDENCE], entries, unknown: user.unknown, repo };
 }
 
@@ -349,9 +364,41 @@ export function resolveConfig(options = {}) {
  * @returns {{entries: Record<string, {value: unknown, origin: string}>}}
  */
 export function resolveModelConfig(options = {}) {
+  return resolvePrefixConfig("model.", options);
+}
+
+/**
+ * Only the `memory.*` keys (user config + environment; a repository cannot set them), validated, including the cross-key
+ * conflicts. Same isolation as resolveModelConfig: an unrelated bad key elsewhere cannot fail a memory command.
+ * @param {ResolveOptions} [options]
+ * @returns {{entries: Record<string, {value: unknown, origin: string}>}}
+ */
+export function resolveMemoryConfig(options = {}) {
+  const resolved = resolvePrefixConfig("memory.", options);
+  validateMemoryConflicts(resolved.entries);
+  return resolved;
+}
+
+/**
+ * Cross-key rules of the memory settings. Shared by resolveConfig (so `config show` reports it) and resolveMemoryConfig.
+ * @param {Record<string, {value: unknown, origin: string}>} entries
+ * @throws {ConfigError} naming both keys and where each value came from
+ */
+export function validateMemoryConflicts(entries) {
+  const idle = entries["memory.idleRefreshMinutes"];
+  const cold = entries["memory.coldResumeMinutes"];
+  if (idle && cold && cold.value < idle.value) {
+    throw new ConfigError(
+      `Invalid value for 'memory.coldResumeMinutes' (${cold.origin}): ${cold.value} is smaller than memory.idleRefreshMinutes (${idle.value}, ${idle.origin}).`,
+      { key: "memory.coldResumeMinutes", origin: cold.origin, remediation: "Set memory.coldResumeMinutes to at least memory.idleRefreshMinutes, or lower memory.idleRefreshMinutes." },
+    );
+  }
+}
+
+function resolvePrefixConfig(prefix, options = {}) {
   const env = options.env ?? process.env;
   const fs = options.fs ?? nodeFs;
-  const keys = Object.keys(KNOWN_KEYS).filter((key) => key.startsWith("model."));
+  const keys = Object.keys(KNOWN_KEYS).filter((key) => key.startsWith(prefix));
   const entries = {};
   for (const key of keys) entries[key] = { value: structuredClone(KNOWN_KEYS[key].default), origin: "default" };
   const withRemediation = (error, file) => {
