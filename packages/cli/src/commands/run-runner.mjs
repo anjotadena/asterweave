@@ -19,6 +19,8 @@ import "../runtime/graphs/index.mjs";
 import { loadHooks } from "../runtime/hooks.mjs";
 import { isValidRunId, loadRun, runDir } from "../runtime/ledger.mjs";
 import { createRunForGraph } from "../runtime/loop.mjs";
+import { initContribution } from "../runtime/contribution.mjs";
+import { routeIntent } from "../runtime/skills.mjs";
 import { loadPolicy } from "../runtime/policy.mjs";
 import { configOfPinned, pinRouting, routingFromEntries } from "../runtime/routing.mjs";
 import { claimAttachments, listAttachments, markAttachmentsSent, pendingAttachmentsOf, sessionClaiming } from "../runtime/attachments.mjs";
@@ -28,10 +30,12 @@ import { assertTrusted } from "../trust.mjs";
 import { attachInspected, attachmentViews, checkImageModel, imageModelError, imagePaths, imageSource, inspectAll, sendLines, storeOpts, storeProblemError } from "./images.mjs";
 import { seams, stringOption } from "./shared.mjs";
 
-const WORKFLOWS = ["delivery", "bugfix"];
+const WORKFLOWS = ["delivery", "bugfix", "contribute", "audit", "auto"];
+// Skill and authorization scope recorded for a workflow chosen by name (`auto` records what the router decided).
+const WORKFLOW_SKILL = Object.freeze({ audit: { skill: "repo-audit", scope: "discovery" }, contribute: { skill: "contribute", scope: "implement" }, bugfix: { skill: "bug-fix", scope: "implement" } });
 /** One claude turn may take minutes: the loop's per-step deadline is raised well above its 2 minute default. */
 export const RUNNER_STEP_MS = 40 * 60_000;
-export const START_USAGE = "Usage: asterweave run start <goal> [--workflow delivery|bugfix] [--session <id>] [--runner claude|fake] [--worktree <name>] [--image <path>]... [--json]";
+export const START_USAGE = "Usage: asterweave run start <goal> [--workflow delivery|bugfix|contribute|audit|auto] [--session <id>] [--runner claude|fake] [--worktree <name>] [--image <path>]... [--json]";
 export const RESUME_USAGE = "Usage: asterweave run resume <runId> [--json]";
 
 const safe = (text, limit = 200) => sanitizeForTerminal(String(text ?? "")).slice(0, limit);
@@ -129,8 +133,18 @@ export async function startClaudeRun(ctx, rest, deps, kit) {
   if (rest.length !== 1 || rest[0].trim() === "") throw new UsageError(rest.length === 0 ? "run start needs a goal." : "run start takes exactly one goal (quote it).", { remediation: START_USAGE });
   const goal = rest[0].trim();
   if (goal.length > kit.GOAL_MAX) throw new UsageError(`The goal is longer than ${kit.GOAL_MAX} characters.`, { remediation: START_USAGE });
-  const workflow = stringOption(ctx, "workflow", START_USAGE) ?? "delivery";
+  let workflow = stringOption(ctx, "workflow", START_USAGE) ?? "delivery";
   if (!WORKFLOWS.includes(workflow)) throw new UsageError(`Unknown workflow '${safe(workflow, 40)}'. Use one of: ${WORKFLOWS.join(", ")}.`, { remediation: START_USAGE });
+  // `auto` is opt-in: the default stays delivery. The router is deterministic; the decision is recorded with the run.
+  let recorded = WORKFLOW_SKILL[workflow] ?? null;
+  if (workflow === "auto") {
+    const route = routeIntent(goal);
+    if (route.skill === null || route.workflow === null) {
+      throw new UsageError(route.skill === null ? "No skill matches this goal; choose --workflow explicitly." : `This goal selects the ${route.skill} skill, which runs inside a session and has no workflow; choose --workflow explicitly.`, { remediation: START_USAGE });
+    }
+    workflow = route.workflow;
+    recorded = { skill: route.skill, scope: route.scope };
+  }
   const graph = getGraph(`${workflow}@1`);
   const sessionOption = stringOption(ctx, "session", START_USAGE);
   const worktreeName = stringOption(ctx, "worktree", START_USAGE);
@@ -193,6 +207,7 @@ export async function startClaudeRun(ctx, rest, deps, kit) {
   const hooks = loadHooks({ ...seams(ctx), repoPath: workspace });
   // The run is created FIRST: a duplicate --run-id (or any ledger error) leaves no session and no stored image copy behind.
   const created = createRunForGraph({ graph, goal, repo: { key: repo.key, realpath: workspace }, runId, policyHash: policy.policyHash, routing, ...seams(ctx) });
+  if (recorded) initContribution(created.dir, { skill: recorded.skill, workflow, objective: goal, level: recorded.scope }); // the scope comes from the command, never from repository text
   let attachments = [];
   const heldWarnings = [];
   try {

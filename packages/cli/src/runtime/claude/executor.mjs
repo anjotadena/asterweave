@@ -34,11 +34,20 @@ const TEST_TOOLS = ["Bash(npm test:*)", "Bash(npm run test:*)", "Bash(pnpm test:
 const VCS_TOOLS = ["Bash(git:*)", "Bash(gh:*)"];
 /** Default allowedTools by node; the PreToolUse hook still classifies every call. Override with options.allowedTools. */
 export const NODE_TOOLS = Object.freeze({
+  discover: [...READ_TOOLS, ...TEST_TOOLS], audit: [...READ_TOOLS, ...TEST_TOOLS], triage: READ_TOOLS, select: [...READ_TOOLS, ...TEST_TOOLS],
+  "test-verify": [...READ_TOOLS, ...TEST_TOOLS], "pr-review": READ_TOOLS, "pr-prepare": [...READ_TOOLS, "Bash(git add:*)", "Bash(git commit:*)"],
   intake: READ_TOOLS, analyze: [...READ_TOOLS, ...TEST_TOOLS], challenge: READ_TOOLS, plan: READ_TOOLS,
   implement: [...READ_TOOLS, ...EDIT_TOOLS, ...TEST_TOOLS], test: [...READ_TOOLS, ...TEST_TOOLS], verify: [...READ_TOOLS, ...TEST_TOOLS], review: READ_TOOLS,
   "submit-pr": [...READ_TOOLS, ...VCS_TOOLS], "monitor-pipeline": [...READ_TOOLS, ...VCS_TOOLS], "resolve-review-comments": [...READ_TOOLS, ...EDIT_TOOLS, ...VCS_TOOLS], "update-work-item": [...READ_TOOLS, ...VCS_TOOLS],
 });
 const OBJECTIVES = {
+  discover: "Discover repository identity, branch and commit, license, setup, contribution guidance and tooling; run the existing checks for a baseline (do not change files).",
+  audit: "Audit the relevant code and user journeys. Report findings with evidence; mark scanner output as suspected until assessed (do not change files).",
+  triage: "Triage the findings: duplicates, reproduction status, scope, dependencies, acceptance criteria and a fixability decision (do not change files).",
+  select: "Select one bounded task, define acceptance criteria and record its reproduction before any change.",
+  "test-verify": "Run the focused and repository-required checks and report real results; a check that cannot run is blocked, not passed.",
+  "pr-review": "Review the complete diff for correctness, security and accidental changes.",
+  "pr-prepare": "Prepare the contribution package locally: focused diff, PR title and body, validation summary. Do not push or open a pull request.",
   intake: "Understand the goal and restate the task.", analyze: "Inspect the repository and capture a baseline (do not change files).", challenge: "Challenge the requirements: gaps, risks, ambiguity.",
   plan: "Write a plan for the change (do not change files).", implement: "Make the change described by the approved plan.", test: "Run the unit and integration tests and report the real results.",
   verify: "Check the change against the acceptance criteria.", review: "Review the change for code quality and security.", "submit-pr": "Prepare the pull request.",
