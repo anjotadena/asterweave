@@ -29,7 +29,7 @@ repository checked out; approved plan when the repository uses the delivery work
 ## What happens
 
 1. Write acceptance criteria if none exist, and inspect analogous code, architecture boundaries and public contracts.
-2. In the Asterweave delivery workflow, follow the approved plan through the [implement skill](../implement/SKILL.md). Otherwise make the smallest cohesive change using existing patterns.
+2. In the Asterweave delivery workflow, follow the approved plan through the implement skill. Otherwise make the smallest cohesive change using existing patterns.
 3. Add tests with the behavior. Do not add a dependency, migration or public API break without explicit approval.
 4. Verify every acceptance criterion with `test-verify` and report the evidence per criterion.
 

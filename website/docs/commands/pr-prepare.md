@@ -31,7 +31,7 @@ test-verify and pr-review completed or their gaps stated.
 1. Confirm the diff is focused: no unrelated edits, generated noise or secrets.
 2. Follow the repository's PR template and commit conventions. Commit only if the user authorized commits.
 3. Write the title and body: problem, change, issue linkage, validation summary with exact commands and results, remaining blockers and limitations.
-4. To publish, hand off to [submit-pr](../submit-pr/SKILL.md). It needs authorization naming the action and target, and it records the PR number the moment it exists.
+4. To publish, hand off to submit-pr. It needs authorization naming the action and target, and it records the PR number the moment it exists.
 
 ## Outputs
 
