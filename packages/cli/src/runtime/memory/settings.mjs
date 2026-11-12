@@ -10,8 +10,11 @@ export const MEMORY_DEFAULTS = Object.freeze({
   coldResumeMinutes: 60,
   contextTokenBudget: 4000,
   retrievalLimit: 8,
+  summaryMinNewEvents: 20,
+  summaryDebounceMinutes: 10,
   semanticSearchEnabled: false,
   claudeImportEnabled: false,
+  toolResultExcerptChars: 2000,
 });
 
 /** `{ "memory.enabled": {value}, ... }` (resolveMemoryConfig entries) -> `{ enabled, ... }`. */

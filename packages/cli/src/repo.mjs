@@ -281,6 +281,25 @@ export async function readOrigin(repoPath, options = {}) {
 }
 
 /**
+ * Like readOrigin, but tells "there is no origin" apart from "git could not answer" (not a repository, a lock, a timeout, no
+ * git): `state` is 'ok' (with `origin`), 'none' (git said there is no such remote, exit 2) or 'failed' (with a short `reason`).
+ * Never throws. A caller that keys anything on the answer must not treat 'failed' as 'none'.
+ * @returns {Promise<{state: 'ok', origin: {url: string, github: ReturnType<typeof parseGithubRemote>}} | {state: 'none'} | {state: 'failed', reason: string}>}
+ */
+export async function readOriginStatus(repoPath, options = {}) {
+  let result;
+  try {
+    result = await git(["remote", "get-url", "origin"], repoPath, options);
+  } catch (error) {
+    return { state: "failed", reason: error?.code === "GIT_NOT_INSTALLED" ? "git was not found" : "git could not run" };
+  }
+  const raw = String(result.stdout ?? "").trim();
+  if (result.code === 0 && raw) return { state: "ok", origin: { url: sanitizeRemoteUrl(raw), github: parseGithubRemote(raw) } };
+  if (result.code === 0 || result.code === 2 || /no such remote/i.test(String(result.stderr ?? ""))) return { state: "none" };
+  return { state: "failed", reason: result.timedOut ? "git timed out" : `git exited with ${result.code ?? "a signal"}${result.stderr ? `: ${firstLine(result.stderr)}` : ""}` };
+}
+
+/**
  * Origin of the clone at `inputPath`, resolved from its work-tree root. Never throws: a path that is
  * missing, not a work tree, has no origin, or where git cannot run yields null (callers then fall
  * back to listing repositories).

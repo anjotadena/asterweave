@@ -4,6 +4,7 @@
 import { EXIT, UsageError } from "../exit-codes.mjs";
 import { contextHelpText } from "./context.mjs";
 import { mcpHelpText } from "./mcp.mjs";
+import { memoryHelpText } from "./memory.mjs";
 import { pluginHelpText } from "./plugin.mjs";
 import { skillHelpText } from "./skill.mjs";
 import { pipelineHelpText } from "./pipeline.mjs";
@@ -186,6 +187,7 @@ export const COMMAND_HELP = Object.freeze({
     "Exit codes: 0 ok · 1 error · 2 usage",
   ]),
   mcp: block(mcpHelpText.split("\n")),
+  memory: block(memoryHelpText.trimEnd().split("\n")),
   session: block(sessionHelpText.trimEnd().split("\n")),
   plugin: block(pluginHelpText.trimEnd().split("\n")),
   skill: block(skillHelpText.trimEnd().split("\n")),

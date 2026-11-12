@@ -1,5 +1,6 @@
 // `run start <goal>` and `run resume <runId>` with the Claude runner (the public path). Called from run.mjs, which passes its helpers in
-// `kit` (no import cycle). The scripted fake executor path stays in run.mjs behind ASTERWEAVE_DEV_EXECUTORS=1.
+// `kit` (no import cycle). The scripted fake executor path stays in run.mjs behind ASTERWEAVE_DEV_EXECUTORS=1; it uses the same memory
+// wiring (startMemory, memoryInfoOf, withMemoryFinish, exported here) through attachMemory, so dev runs capture and inject identically.
 //
 // Before anything is created: the repository must be trusted (exit 4), claude must be installed and recent enough (exit 1 with a
 // remediation), the policy and routing configuration must load (exit 5). Then the run is created, optionally linked to a session
@@ -7,10 +8,15 @@
 // Claude runs its own tools: the PreToolUse hook (generated settings) is the only gate before them; see website/docs/cli/runner.md.
 
 import * as nodeFs from "node:fs";
+import path from "node:path";
 import { CliError, EXIT, UsageError } from "../exit-codes.mjs";
 import { sanitizeForTerminal, sanitizeLines } from "../redact.mjs";
 import { resolveUserDir } from "../paths.mjs";
-import { resolveModelConfig } from "../config.mjs";
+import { resolveMemoryConfig, resolveModelConfig } from "../config.mjs";
+import { readOriginStatus } from "../repo.mjs";
+import { readCloneAnchor } from "../runtime/memory/identity.mjs";
+import { createMemoryPipeline } from "../runtime/memory/pipeline.mjs";
+import { settingsFromEntries } from "../runtime/memory/settings.mjs";
 import { checkClaude } from "../runtime/claude/run.mjs";
 import { describeFailure } from "../runtime/claude/classify.mjs";
 import { createClaudeExecutor } from "../runtime/claude/executor.mjs";
@@ -22,13 +28,13 @@ import { createRunForGraph } from "../runtime/loop.mjs";
 import { initContribution } from "../runtime/contribution.mjs";
 import { routeIntent } from "../runtime/skills.mjs";
 import { loadPolicy } from "../runtime/policy.mjs";
-import { configOfPinned, pinRouting, routingFromEntries } from "../runtime/routing.mjs";
+import { configOfPinned, pinRouting, resolveRoute, routingFromEntries } from "../runtime/routing.mjs";
 import { claimAttachments, listAttachments, markAttachmentsSent, pendingAttachmentsOf, sessionClaiming } from "../runtime/attachments.mjs";
 import { IMAGE_LIMITS } from "../runtime/image-format.mjs";
 import { addCheckpoint, createSession, linkRun, listSessions, loadSession, setProviderSession } from "../runtime/sessions.mjs";
 import { assertTrusted } from "../trust.mjs";
 import { attachInspected, attachmentViews, checkImageModel, imageModelError, imagePaths, imageSource, inspectAll, sendLines, storeOpts, storeProblemError } from "./images.mjs";
-import { seams, stringOption } from "./shared.mjs";
+import { runtimeSeams, seams, stringOption } from "./shared.mjs";
 
 const WORKFLOWS = ["delivery", "bugfix", "contribute", "audit", "auto"];
 // Skill and authorization scope recorded for a workflow chosen by name (`auto` records what the router decided).
@@ -82,13 +88,13 @@ function claudeSeams(deps, checked) {
   return { ...deps.claude, claudePath: checked.command, claudeArgs: checked.prefix, claudeVersion: checked.version.join(".") };
 }
 
-function makeExecutor(ctx, deps, { graph, run, dir, workspace, checked, sessionId, repoKey, providerSessionId, providerSessionModel, attachments, imageSessionId }) {
+function makeExecutor(ctx, deps, { graph, run, dir, workspace, checked, sessionId, repoKey, providerSessionId, providerSessionModel, attachments, imageSessionId, memory }) {
   const options = storeOptions(ctx);
   return createClaudeExecutor({
     graph, cwd: workspace, runId: run.runId, runDir: dir, configDir: resolveUserDir(seams(ctx)), routing: configOfPinned(run.routing),
     providerSessionId: providerSessionId ?? null, ...(typeof providerSessionModel === "string" ? { providerSessionModel } : {}), ...(sessionId ? { sessionId } : {}), claude: { ...claudeSeams(deps, checked), env: ctx.env, ...(ctx.platform ? { platform: ctx.platform } : {}) },
     ...(attachments?.length > 0 ? { attachments: imageSource(imageSessionId ?? sessionId, attachments, ctx, repoKey), onAttachmentsSent: (ids) => { markAttachmentsSent(imageSessionId ?? sessionId, ids, run.runId, storeOpts(ctx, repoKey)); } } : {}),
-    ...(deps.runTurn ? { runTurn: deps.runTurn } : {}), ...(deps.runnerOptions ?? {}),
+    ...(deps.runTurn ? { runTurn: deps.runTurn } : {}), ...(deps.runnerOptions ?? {}), ...(memory ? { memory } : {}),
     onProviderSession: sessionId ? (id) => { setProviderSession(repoKey, sessionId, id, options); } : undefined,
   });
 }
@@ -113,6 +119,63 @@ async function makeWorktree(ctx, kit, repo, name) {
   const baseOf = (value) => (typeof value === "string" ? value : value?.commit ?? null);
   return { path: done.path ?? plan.path, branch: done.branch ?? plan.branch ?? null, base: baseOf(done.base) ?? baseOf(plan.base), created: true };
 }
+
+/**
+ * The memory pipeline of this run (runtime/memory/pipeline.mjs), or null when memory is off (memory.enabled = false, i.e.
+ * `memory capture off`). Never throws: an unusable store or configuration is a visible degraded line, not a failed run.
+ */
+export async function startMemory(ctx, deps, { repo, run, workspace, branch, externalSessionId, providerContextLost }) {
+  const warn = (line) => {
+    if (ctx.options?.json === true) return;
+    try { ctx.stderr?.write?.(`${safe(line, 400)}\n`); } catch { /* a failing stderr must not break the run or leak the open store */ }
+  };
+  let settings;
+  try {
+    settings = settingsFromEntries(resolveMemoryConfig({ ...seams(ctx), ...(ctx.userDir ? { userConfigFile: path.join(ctx.userDir, "config.json") } : {}) }).entries);
+  } catch (error) {
+    warn(`Memory: not used for this run: the memory settings are invalid (${safe(error.message, 160)}). Nothing of this run is saved to memory.`);
+    return null;
+  }
+  if (settings.enabled === false) return null;
+  const probeOptions = { env: ctx.env, ...(ctx.spawn ? { spawn: ctx.spawn } : {}), ...(ctx.exists ? { exists: ctx.exists } : {}), ...(ctx.platform ? { platform: ctx.platform } : {}) };
+  // The identity inputs. "git could not answer" is never read as "no origin" (that would be a false changed-remote ambiguity whose
+  // `resolve new` advice splits the history): memory is skipped for this run instead, with one degraded line and no ambiguity.
+  let remote = null;
+  let unavailable;
+  if (repo.git) {
+    const origin = await (deps.readOriginStatus ?? readOriginStatus)(repo.workspace, runtimeSeams(ctx));
+    if (origin.state === "ok") remote = origin.origin.url;
+    else if (origin.state === "failed") unavailable = `git could not read the origin remote (${safe(origin.reason, 120)})`;
+  }
+  // A clone without a remote is bound to its root commit(s) (a folder outside git: its inode and birth time), see identity.mjs.
+  let anchor = null;
+  if (unavailable === undefined && remote === null) {
+    const read = await (deps.readCloneAnchor ?? readCloneAnchor)({ workspace: repo.workspace, git: repo.git === true }, { ...probeOptions, ...(ctx.fs ? { fs: ctx.fs } : {}) });
+    if (read.ok) anchor = read.anchor;
+    else unavailable = `the repository's identity could not be read (${safe(read.reason, 120)})`;
+  }
+  let model = "default";
+  try { model = resolveRoute({ config: configOfPinned(run.routing), node: run.currentNode }).model ?? "default"; } catch { model = "default"; }
+  // deferStart: nothing is written (and no resume note said) until the loop, holding the run lock, first uses the pipeline.
+  return createMemoryPipeline({
+    settings, storeOptions: { ...storeOptions(ctx), ...(ctx.loadSqlite ? { loadSqlite: ctx.loadSqlite } : {}) },
+    repo: { cloneKey: repo.key, kind: repo.git ? "git-common-dir" : "directory", remote, anchor, ...(unavailable !== undefined ? { unavailable } : {}) },
+    runId: run.runId, goal: run.goal, run, externalSessionId: externalSessionId ?? null, workspace, branch, model, providerContextLost, probeOptions, onDegraded: warn,
+    deferStart: true, onNote: (note) => warn(`Memory: ${note}`),
+    ...(ctx.memoryOwner ? { owner: ctx.memoryOwner } : {}), ...(deps.memory ?? {}),
+  });
+}
+
+export const memoryInfoOf = (pipeline) => () => {
+  const status = pipeline?.status();
+  if (!status || status.degraded.length === 0) return null;
+  return { degraded: true, saved: status.saved, failed: status.failed, reasons: status.degraded.slice(0, 5) };
+};
+
+export const withMemoryFinish = (finish, pipeline) => async (result) => {
+  try { finish(result); } catch { /* see checkpoint */ }
+  await pipeline?.finish(result);
+};
 
 const checkpoint = (repoKey, sessionId, ctx) => (result) => {
   if (!sessionId) return;
@@ -250,8 +313,13 @@ export async function startClaudeRun(ctx, rest, deps, kit) {
   }
   if (sessionId) checkpoint(repo.key, sessionId, ctx)({ run: created.run, seq: 0, status: "created" });
   const imageInfo = announceImages(ctx, attachments, imageCheck, heldWarnings);
-  const executor = makeExecutor(ctx, deps, { graph, run: created.run, dir: created.dir, workspace, checked, sessionId, repoKey: repo.key, providerSessionId, attachments });
-  return kit.drive(ctx, { ...deps, loopOptions: { stepMs: RUNNER_STEP_MS, ...deps.loopOptions }, dir: created.dir, graph, executor, policy, hooks, repo: { ...repo, workspace }, branch, run: created.run, finish: checkpoint(repo.key, sessionId, ctx), imageInfo });
+  const memory = await startMemory(ctx, deps, { repo, run: created.run, workspace, branch, externalSessionId: sessionId, providerContextLost: providerSessionId === null || attachments.length > 0 });
+  try {
+    const executor = makeExecutor(ctx, deps, { graph, run: created.run, dir: created.dir, workspace, checked, sessionId, repoKey: repo.key, providerSessionId, attachments, memory });
+    return await kit.drive(ctx, { ...deps, loopOptions: { stepMs: RUNNER_STEP_MS, ...deps.loopOptions, ...(memory ? { onCommitted: memory.onCommitted } : {}) }, dir: created.dir, graph, executor, policy, hooks, repo: { ...repo, workspace }, branch, run: created.run, finish: withMemoryFinish(checkpoint(repo.key, sessionId, ctx), memory), imageInfo, memoryInfo: memoryInfoOf(memory) });
+  } finally {
+    memory?.close();
+  }
 }
 
 /** The run exists already when an image step fails after it: say how to get rid of it (the error keeps its code and exit code). */
@@ -314,6 +382,11 @@ export async function resumeClaudeRun(ctx, rest, deps, kit) {
     if (imageCheck.refused.length > 0) throw imageModelError(imageCheck.refused);
   }
   const imageInfo = announceImages(ctx, attachments, imageCheck);
-  const executor = makeExecutor(ctx, deps, { graph, run, dir, workspace, checked, sessionId, repoKey: repo.key, providerSessionId: providerEvent?.providerSessionId ?? null, providerSessionModel: providerEvent?.routeModel, attachments, imageSessionId });
-  return kit.drive(ctx, { ...deps, loopOptions: { stepMs: RUNNER_STEP_MS, ...deps.loopOptions }, dir, graph, executor, policy, hooks, repo: { ...repo, workspace }, branch, run, finish: checkpoint(repo.key, sessionId, ctx), imageInfo });
+  const memory = await startMemory(ctx, deps, { repo, run, workspace, branch, externalSessionId: sessionId, providerContextLost: !providerEvent || attachments.length > 0 });
+  try {
+    const executor = makeExecutor(ctx, deps, { graph, run, dir, workspace, checked, sessionId, repoKey: repo.key, providerSessionId: providerEvent?.providerSessionId ?? null, providerSessionModel: providerEvent?.routeModel, attachments, imageSessionId, memory });
+    return await kit.drive(ctx, { ...deps, loopOptions: { stepMs: RUNNER_STEP_MS, ...deps.loopOptions, ...(memory ? { onCommitted: memory.onCommitted } : {}) }, dir, graph, executor, policy, hooks, repo: { ...repo, workspace }, branch, run, finish: withMemoryFinish(checkpoint(repo.key, sessionId, ctx), memory), imageInfo, memoryInfo: memoryInfoOf(memory) });
+  } finally {
+    memory?.close();
+  }
 }

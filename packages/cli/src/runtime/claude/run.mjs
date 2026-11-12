@@ -164,7 +164,7 @@ export async function runClaudeTurn(opts = {}) {
   const killGraceMs = opts.killGraceMs ?? RUN_LIMITS.killGraceMs;
   const exitGraceMs = opts.exitGraceMs ?? RUN_LIMITS.exitGraceMs;
   const maxMalformed = opts.maxMalformedLines ?? RUN_LIMITS.maxMalformedLines;
-  const parser = createStreamParser({ limits: opts.streamLimits, onEvent: opts.onEvent, now });
+  const parser = createStreamParser({ limits: opts.streamLimits, onEvent: opts.onEvent, now, toolResultExcerptChars: opts.toolResultExcerptChars ?? 0 }); // 0: tool output is never read
 
   const raw = await new Promise((resolve) => {
     let settled = false;
@@ -256,6 +256,8 @@ export async function runClaudeTurn(opts = {}) {
     claudeVersion: version.join("."), providerSessionId: parsed.providerSessionId, model: parsed.model, usage: parsed.usage, toolEvents: parsed.toolEvents,
     resultText: parsed.resultText, costUsd: parsed.costUsd, exitCode: raw.exitCode, killed, malformedLines: parsed.malformedLines, stderrTail,
     toolEventsDropped: parsed.toolEventsDropped, toolResults: parsed.toolResults, durationMs: Math.max(0, now() - startedAt),
+    // bounded, redacted tool evidence for the memory pipeline only (present only when asked for); never written to the ledger
+    ...(parsed.toolResultExcerpts ? { toolResultExcerpts: parsed.toolResultExcerpts } : {}),
   };
   if (ok) return turnResult({ ...base, ok: true });
   const classified = classifyFailure({

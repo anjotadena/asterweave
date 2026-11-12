@@ -17,6 +17,7 @@
 // VISIBILITY. user-scope items are for their owner only. repository/session items are the owner's unless `visibility` is
 // 'shared', in which case other readers of the SAME repository may read them.
 
+import { stringifyJson } from "../../json.mjs";
 import { addDays, degradedResult, newId, notExpired, placeholders, transaction } from "./db.mjs";
 import { cleanField } from "./redact.mjs";
 import { withDefaults } from "./settings.mjs";
@@ -86,7 +87,7 @@ function insertItem(mem, row, sources) {
        VALUES (:id, :owner, :repo_id, :session_id, :visibility, :scope, :kind, :content, :status, :origin, :confidence, :source_event_ids,
          :recorded_at, :effective_at, :last_verified_at, :expires_at, :supersedes, NULL, :source_expired, :recorded_at)`,
     )
-    .run({ ...row, source_event_ids: JSON.stringify(sources) });
+    .run({ ...row, source_event_ids: stringifyJson(sources) });
   const link = mem.db.prepare("INSERT OR IGNORE INTO item_sources (item_id, event_id) VALUES (?, ?)");
   for (const eventId of sources) link.run(row.id, eventId);
 }
@@ -262,7 +263,8 @@ export function inspectItem(mem, idOrPrefix, viewer, { repoId } = {}) {
     return { id: eventId, available: true, sessionId: row.session_id, seq: Number(row.seq), eventTime: row.event_time, status: row.status, snippet: row.content.slice(0, 200) };
   });
   const link = (id) => {
-    const row = id ? mem.db.prepare("SELECT id, status, kind, content FROM memory_items WHERE id = ?").get(id) : null;
+    // An expired neighbour of the chain is named, never shown: its text is past retention.
+    const row = id ? mem.db.prepare(`SELECT id, status, kind, content FROM memory_items WHERE id = :id AND ${notExpired("expires_at")}`).get({ id, now }) : null;
     return row ? { id: row.id, status: row.status, kind: row.kind, content: row.content.slice(0, 200) } : id ? { id, status: "unavailable" } : null;
   };
   return { ok: true, item, sources, supersedes: link(item.supersedes), replacedBy: link(item.replacedBy) };

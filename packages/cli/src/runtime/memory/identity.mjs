@@ -13,8 +13,15 @@
 //     `resolveAmbiguity` is the only way out: 'same' (the remote moved: keep the history, remember the new remote as an alias)
 //     or 'new' (a different repository: bind this clone to the repository of the new remote, history stays with the old one).
 //     'same' is refused when the new remote already belongs to another repository, so two repositories never merge.
+//   - A clone WITHOUT a remote is also bound to an ANCHOR (readCloneAnchor): its root commit(s), `unborn` before the first
+//     commit, or the folder's inode and birth time outside git. A different anchor at the same clone key (rm -rf + git init, a
+//     reused folder) is the same kind of ambiguity as a changed remote. An unborn clone takes its first root commit without
+//     ambiguity only while no memory is stored for its repository. Clones bound before anchors existed record theirs on next sight.
 
 import { createHash, randomBytes } from "node:crypto";
+import * as nodeFs from "node:fs";
+import { runBinary } from "../../proc.mjs";
+import { gitEnv } from "../../repo.mjs";
 import { transaction } from "./db.mjs";
 
 const CASE_INSENSITIVE_HOSTS = new Set(["github.com", "gitlab.com", "bitbucket.org"]);
@@ -84,6 +91,105 @@ function accepts(db, repo, observed) {
   return db.prepare("SELECT 1 FROM repo_aliases WHERE repo_id = ? AND alias = ?").get(repo.id, observed) !== undefined;
 }
 
+const ANCHOR_TIMEOUT_MS = 10_000;
+const ANCHOR_ROOTS_MAX = 16;
+const ANCHOR_OUTPUT_MAX = 64 * 1024;
+const gitFlags = (platform) => ["--no-pager", "--no-optional-locks", "-c", "core.fsmonitor=false", "-c", `core.hooksPath=${platform === "win32" ? "NUL" : "/dev/null"}`, "-c", "protocol.ext.allow=never", "-c", "core.sshCommand="];
+
+/**
+ * The intrinsic anchor of a clone (see the header). Read-only, bounded (timeout, output cap, at most 16 roots), no shell, the
+ * hardened git flags and environment. Roots are read from HEAD and every local branch, which all worktrees of a clone share.
+ * @param {{workspace: string, git: boolean}} repo
+ * @param {{env?: object, spawn?: Function, exists?: Function, platform?: string, timeoutMs?: number, fs?: typeof nodeFs,
+ *   runGit?: (args: string[]) => Promise<{code: number|null, stdout: string, stderr: string, error?: object, timedOut?: boolean}>}} [options]
+ * @returns {Promise<{ok: true, anchor: string} | {ok: false, reason: string}>}  not ok: the anchor is unknown for now (never "different")
+ */
+export async function readCloneAnchor(repo, options = {}) {
+  if (!repo?.git) {
+    try {
+      const stat = (options.fs ?? nodeFs).statSync(repo.workspace, { bigint: true });
+      return { ok: true, anchor: `dir:${stat.ino}:${stat.birthtimeMs}` };
+    } catch (error) {
+      return { ok: false, reason: `the folder could not be inspected (${error?.code ?? "error"})` };
+    }
+  }
+  const platform = options.platform ?? process.platform;
+  const runGit = options.runGit ?? ((args) => runBinary("git", [...gitFlags(platform), ...args], {
+    cwd: repo.workspace, env: gitEnv(options.env ?? process.env), spawn: options.spawn, exists: options.exists, platform, timeoutMs: options.timeoutMs ?? ANCHOR_TIMEOUT_MS, maxOutputBytes: ANCHOR_OUTPUT_MAX,
+  }));
+  let result;
+  try {
+    result = await runGit(["rev-list", "--max-parents=0", "HEAD", "--branches", "--"]);
+  } catch {
+    return { ok: false, reason: "git could not run" };
+  }
+  if (result?.error || result?.timedOut) return { ok: false, reason: result.timedOut ? "git timed out" : "git could not run" };
+  if (result.code === 0) {
+    const roots = [...new Set(String(result.stdout ?? "").split(/\r?\n/).map((line) => line.trim()).filter((line) => /^[0-9a-f]{40,64}$/.test(line)))].sort().slice(0, ANCHOR_ROOTS_MAX);
+    return roots.length > 0 ? { ok: true, anchor: `git:${roots.join(",")}` } : { ok: false, reason: "git listed no root commit" };
+  }
+  if (/ambiguous argument 'HEAD'|unknown revision|bad revision 'HEAD'/i.test(String(result.stderr ?? ""))) return { ok: true, anchor: "unborn" };
+  return { ok: false, reason: `git rev-list failed (exit ${result.code})` };
+}
+
+/**
+ * When this repository's content began, for the importer's time cutoff: a transcript record written before the repository existed
+ * cannot belong to it, even when its cwd is the same path today (a folder reused for another repository). Git: the earliest author or
+ * committer time of any root commit (author time survives rebases and imported history, so this errs towards accepting). Not a git
+ * repository: the folder's birth time. Read-only, bounded, no shell, hardened flags. null = unknown (the caller applies no cutoff and
+ * says so); an unborn repository has no commit yet, so its folder's birth time is used.
+ * @param {{workspace: string, git: boolean}} repo
+ * @param {Parameters<typeof readCloneAnchor>[1]} [options]
+ * @returns {Promise<{at: string|null, source: 'root-commit'|'folder'|'unknown', reason?: string}>}
+ */
+export async function readRepositoryBirth(repo, options = {}) {
+  const folderBirth = () => {
+    try {
+      const ms = Number((options.fs ?? nodeFs).statSync(repo.workspace).birthtimeMs);
+      return Number.isFinite(ms) && ms > 0 ? { at: new Date(ms).toISOString(), source: "folder" } : { at: null, source: "unknown", reason: "the folder has no birth time" };
+    } catch (error) {
+      return { at: null, source: "unknown", reason: `the folder could not be inspected (${error?.code ?? "error"})` };
+    }
+  };
+  if (!repo?.git) return folderBirth();
+  const platform = options.platform ?? process.platform;
+  const runGit = options.runGit ?? ((args) => runBinary("git", [...gitFlags(platform), ...args], {
+    cwd: repo.workspace, env: gitEnv(options.env ?? process.env), spawn: options.spawn, exists: options.exists, platform, timeoutMs: options.timeoutMs ?? ANCHOR_TIMEOUT_MS, maxOutputBytes: ANCHOR_OUTPUT_MAX,
+  }));
+  let result;
+  try {
+    result = await runGit(["log", "--max-parents=0", "--format=%at %ct", "HEAD", "--branches", "--"]);
+  } catch {
+    return { at: null, source: "unknown", reason: "git could not run" };
+  }
+  if (result?.error || result?.timedOut) return { at: null, source: "unknown", reason: result.timedOut ? "git timed out" : "git could not run" };
+  if (result.code !== 0) {
+    if (/ambiguous argument 'HEAD'|unknown revision|bad revision 'HEAD'|does not have any commits/i.test(String(result.stderr ?? ""))) return folderBirth();
+    return { at: null, source: "unknown", reason: `git log failed (exit ${result.code})` };
+  }
+  const seconds = String(result.stdout ?? "").split(/\s+/).filter((word) => /^\d{1,12}$/.test(word)).map(Number).filter((n) => n > 0);
+  if (seconds.length === 0) return { at: null, source: "unknown", reason: "git listed no root commit time" };
+  return { at: new Date(Math.min(...seconds) * 1000).toISOString(), source: "root-commit" };
+}
+
+/** 'skip' (nothing observed), 'record' (store the observed anchor), 'same', 'unborn-born' (first commit) or 'mismatch'. Pure. */
+export function compareAnchors(stored, observed) {
+  if (typeof observed !== "string" || observed === "") return "skip";
+  if (typeof stored !== "string" || stored === "") return "record";
+  if (stored === observed) return "same";
+  const roots = (anchor) => (anchor.startsWith("git:") ? anchor.slice(4).split(",").filter(Boolean) : null);
+  const before = roots(stored);
+  const now = roots(observed);
+  // A merge of unrelated history adds a root and a rewrite may drop one: one shared root is still the same repository.
+  if (before && now) return now.some((sha) => before.includes(sha)) ? "record" : "mismatch";
+  if (stored === "unborn" && now) return "unborn-born";
+  return "mismatch";
+}
+
+function hasMemory(db, repoId) {
+  return db.prepare("SELECT 1 FROM sessions WHERE repo_id = ? UNION ALL SELECT 1 FROM memory_items WHERE repo_id = ? LIMIT 1").get(repoId, repoId) !== undefined;
+}
+
 /**
  * @typedef {object} RepoIdentity
  * @property {'ok'|'created'|'ambiguous'|'unmapped'} status
@@ -107,24 +213,34 @@ export function resolveRepoIdentity(mem, input, { create = true } = {}) {
   const kind = input.kind === "directory" ? "directory" : "git-common-dir";
   const remote = canonicalRemote(input.remote ?? null);
   const observed = remote ?? NO_REMOTE;
+  const anchor = typeof input.anchor === "string" && input.anchor !== "" ? input.anchor.slice(0, 2000) : null;
   const at = mem.now();
 
-  const clone = db.prepare("SELECT repo_id FROM repo_clones WHERE clone_key = ?").get(cloneKey);
+  const clone = db.prepare("SELECT repo_id, anchor FROM repo_clones WHERE clone_key = ?").get(cloneKey);
   if (clone) {
     const repo = db.prepare("SELECT id, remote_canonical FROM repos WHERE id = ?").get(clone.repo_id);
+    let observedAnchor = null;
     if (accepts(db, repo, observed)) {
-      if (create) db.prepare("UPDATE repo_clones SET last_seen_at = ? WHERE clone_key = ?").run(at, cloneKey);
-      return { status: "ok", repoId: repo.id, ambiguous: false, remote, ambiguity: null };
+      // Only a clone without a remote is identified by its anchor: with a remote, the remote IS the identity.
+      let verdict = observed === NO_REMOTE ? compareAnchors(clone.anchor, anchor) : "skip";
+      if (verdict === "unborn-born") verdict = hasMemory(db, repo.id) ? "mismatch" : "record";
+      if (verdict !== "mismatch") {
+        if (create && verdict === "record") db.prepare("UPDATE repo_clones SET last_seen_at = ?, anchor = ? WHERE clone_key = ?").run(at, anchor, cloneKey);
+        else if (create) db.prepare("UPDATE repo_clones SET last_seen_at = ? WHERE clone_key = ?").run(at, cloneKey);
+        return { status: "ok", repoId: repo.id, ambiguous: false, remote, ambiguity: null };
+      }
+      observedAnchor = anchor;
     }
-    let open = db.prepare("SELECT id, observed, detected_at FROM repo_ambiguities WHERE clone_key = ? AND observed = ? AND resolved_at IS NULL").get(cloneKey, observed);
+    let open = db.prepare("SELECT id, observed, detected_at FROM repo_ambiguities WHERE clone_key = ? AND observed = ? AND observed_anchor IS ? AND resolved_at IS NULL").get(cloneKey, observed, observedAnchor);
     if (!open && create) {
-      const info = db.prepare("INSERT INTO repo_ambiguities (clone_key, repo_id, observed, detected_at) VALUES (?, ?, ?, ?)").run(cloneKey, repo.id, observed, at);
+      const info = db.prepare("INSERT INTO repo_ambiguities (clone_key, repo_id, observed, observed_anchor, detected_at) VALUES (?, ?, ?, ?, ?)").run(cloneKey, repo.id, observed, observedAnchor, at);
       open = { id: Number(info.lastInsertRowid), observed, detected_at: at };
     }
     return {
       status: "ambiguous",
       repoId: repo.id,
       ambiguous: true,
+      reason: observedAnchor ? "history" : "remote",
       remote,
       ambiguity: open ? { id: Number(open.id), observed: open.observed, detectedAt: open.detected_at } : { id: 0, observed, detectedAt: at },
     };
@@ -138,7 +254,7 @@ export function resolveRepoIdentity(mem, input, { create = true } = {}) {
       repoId = createRepo(db, remote, at);
       created = true;
     }
-    db.prepare("INSERT INTO repo_clones (clone_key, repo_id, kind, first_seen_at, last_seen_at) VALUES (?, ?, ?, ?, ?)").run(cloneKey, repoId, kind, at, at);
+    db.prepare("INSERT INTO repo_clones (clone_key, repo_id, kind, first_seen_at, last_seen_at, anchor) VALUES (?, ?, ?, ?, ?, ?)").run(cloneKey, repoId, kind, at, at, anchor);
     return { status: created ? "created" : "ok", repoId, ambiguous: false, remote, ambiguity: null };
   });
 }
@@ -146,9 +262,9 @@ export function resolveRepoIdentity(mem, input, { create = true } = {}) {
 /** Open ambiguities, optionally of one clone. */
 export function listAmbiguities(mem, cloneKey) {
   const rows = cloneKey === undefined
-    ? mem.db.prepare("SELECT id, clone_key, repo_id, observed, detected_at FROM repo_ambiguities WHERE resolved_at IS NULL ORDER BY id").all()
-    : mem.db.prepare("SELECT id, clone_key, repo_id, observed, detected_at FROM repo_ambiguities WHERE resolved_at IS NULL AND clone_key = ? ORDER BY id").all(String(cloneKey));
-  return rows.map((row) => ({ id: Number(row.id), cloneKey: row.clone_key, repoId: row.repo_id, observed: row.observed, detectedAt: row.detected_at }));
+    ? mem.db.prepare("SELECT id, clone_key, repo_id, observed, observed_anchor, detected_at FROM repo_ambiguities WHERE resolved_at IS NULL ORDER BY id").all()
+    : mem.db.prepare("SELECT id, clone_key, repo_id, observed, observed_anchor, detected_at FROM repo_ambiguities WHERE resolved_at IS NULL AND clone_key = ? ORDER BY id").all(String(cloneKey));
+  return rows.map((row) => ({ id: Number(row.id), cloneKey: row.clone_key, repoId: row.repo_id, observed: row.observed, kind: row.observed_anchor ? "history" : "remote", detectedAt: row.detected_at }));
 }
 
 /**
@@ -163,13 +279,16 @@ export function resolveAmbiguity(mem, cloneKey, decision) {
   if (decision !== "same" && decision !== "new") return { ok: false, code: "USAGE", message: "The decision must be 'same' or 'new'." };
   const key = String(cloneKey);
   return transaction(mem, () => {
-    const open = db.prepare("SELECT id, repo_id, observed FROM repo_ambiguities WHERE clone_key = ? AND resolved_at IS NULL ORDER BY id DESC").get(key);
+    const open = db.prepare("SELECT id, repo_id, observed, observed_anchor FROM repo_ambiguities WHERE clone_key = ? AND resolved_at IS NULL ORDER BY id DESC").get(key);
     if (!open) return { ok: false, code: "REPO_NO_AMBIGUITY", message: "This clone has no open repository ambiguity." };
     const at = mem.now();
     const observed = open.observed;
     const canonical = observed === NO_REMOTE ? null : observed;
     let repoId = open.repo_id;
-    if (decision === "same") {
+    const anchored = typeof open.observed_anchor === "string" && open.observed_anchor !== "";
+    if (decision === "same" && anchored) {
+      // a history ambiguity (e.g. rewritten history): the remote did not change, so there is no alias to add
+    } else if (decision === "same") {
       const owner = canonical ? findRepoByRemote(db, canonical) : null;
       if (owner && owner !== open.repo_id) {
         return { ok: false, code: "REPO_ALIAS_CONFLICT", message: "That remote already belongs to another repository, which is never merged with this one. Resolve as 'new' to bind this clone to it." };
@@ -179,6 +298,7 @@ export function resolveAmbiguity(mem, cloneKey, decision) {
       repoId = (canonical ? findRepoByRemote(db, canonical) : null) ?? createRepo(db, canonical, at);
       db.prepare("UPDATE repo_clones SET repo_id = ?, last_seen_at = ? WHERE clone_key = ?").run(repoId, at, key);
     }
+    if (anchored) db.prepare("UPDATE repo_clones SET anchor = ?, last_seen_at = ? WHERE clone_key = ?").run(open.observed_anchor, at, key);
     db.prepare("UPDATE repo_ambiguities SET resolved_at = ?, resolution = ? WHERE id = ?").run(at, decision, open.id);
     return { ok: true, decision, repoId, previousRepoId: open.repo_id, observed };
   });

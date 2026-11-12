@@ -36,6 +36,8 @@ Without arguments it uses the newest run of this repository and that run's sessi
 
 JSON: `{"ok":true,"context":{...}}` with the stable fields `version`, `source` (`run`, `session` or `none`), `runId`, `sessionId`, `title`, `status`, `contextTokens` (`tokens`, `measured`, `node`, `model`, `at`), `window` (`tokens`, `model`, `source`), `percentUsed`, `cumulative` (`inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheCreationTokens`, `tokens`, `events`, `skipped`), `counters` (`measured` or `unknown` per counter), `budget` (`tokens`, `toolCalls`, `iterations`, `wallMs`, each `{used, limit, remaining}`), `byNode`, `byModel`, `attachments` (`count`, `staged`, `sent`, `bytes`, `stagedBytes`, `sentOn`, `items` with ids, names, formats, sizes, dimensions, full SHA-256 hashes and `sentRunId` (`null` while staged), no bytes), `route` and `policy`. `attachments.count`, `staged` and `sent` are `null` when the attachment store could not be read.
 
+When the run has memory traces ([conversation memory](./memory.md#tokens-and-observability)), the text view adds a `Memory` line and JSON adds `context.memory`: `runId`, `requests`, `memoryTokens` (an **estimate**, characters / 4, `estimated: true`), `selected`, `cacheHits`, `cacheMisses`, `retrievalMs`, `summaryTokens` and `extractionTokens` (0: both are deterministic). It is absent when there is no memory store or no trace, so the view is unchanged for runs without memory. The memory tokens are part of the provider's input tokens above, not an addition to them.
+
 ## Interactive commands
 
 | Command | Shows |

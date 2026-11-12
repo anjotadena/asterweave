@@ -40,6 +40,9 @@ export function toSession(row) {
     archivedAt: row.archived_at,
     expiresAt: row.expires_at,
     lastSeq: Number(row.last_seq),
+    externalSessionId: row.external_session_id ?? null,
+    branch: row.branch ?? null,
+    worktreeId: row.worktree_id ?? null,
   };
 }
 
@@ -76,10 +79,10 @@ export function openSession(mem, input, settings) {
       const at = mem.now();
       mem.db
         .prepare(
-          `INSERT INTO sessions (id, owner, repo_id, task_id, visibility, title, state, created_at, updated_at, last_activity_at, expires_at, last_seq)
-           VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, 0)`,
+          `INSERT INTO sessions (id, owner, repo_id, task_id, visibility, title, state, created_at, updated_at, last_activity_at, expires_at, last_seq, external_session_id, branch, worktree_id)
+           VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, 0, ?, ?, ?)`,
         )
-        .run(id, input.owner, repoId, input.taskId ? String(input.taskId).slice(0, 200) : null, visibility, cleanField(input.title, 200) ?? "", at, at, at, addDays(at, cfg.historyRetentionDays));
+        .run(id, input.owner, repoId, input.taskId ? String(input.taskId).slice(0, 200) : null, visibility, cleanField(input.title, 200) ?? "", at, at, at, addDays(at, cfg.historyRetentionDays), cleanField(input.externalSessionId, 120), cleanField(input.branch, 200), cleanField(input.worktreeId, 200));
       return { ok: true, saved: true, created: true, session: toSession(mem.db.prepare("SELECT * FROM sessions WHERE id = ?").get(id)) };
     });
   } catch (error) {
