@@ -9,11 +9,24 @@
 //   - fields are READ with own-property checks into fresh values; nothing from the child is ever assigned onto an object by
 //     key, so `__proto__`/`constructor` payloads cannot pollute anything; unknown fields are ignored;
 //   - every string that leaves this module is redacted, terminal-sanitized and length-bounded.
+//
+// TOOL RESULTS are counted, and their content is NOT read unless the caller asks for bounded evidence with
+// `toolResultExcerptChars` > 0 (the memory pipeline does, from memory.toolResultExcerptChars; with memory off it is 0 and nothing
+// is retained). Then, per tool_result block, at most `maxToolResultExcerpts` records {toolUseId, isError, excerpt, originalChars,
+// excerptChars, truncated} are kept: the excerpt comes from TEXT content only (a string, or `type:"text"` blocks; images and
+// any other block are never read), at most limit + EXCERPT_REDACT_MARGIN raw characters are looked at, that window is redacted
+// FIRST and only then cut to the limit (so a secret crossing the cut is still recognised). The excerpt leaves this module only
+// through `finish().toolResultExcerpts`: never through `onEvent` (the emitted tool_result event stays content-free), so it cannot
+// reach the terminal, and the runner's ledger records do not copy it.
 
 import { redactText, sanitizeForTerminal } from "../../redact.mjs";
 import { PROVIDER_SESSION_PATTERN } from "./argv.mjs";
 
-export const STREAM_LIMITS = Object.freeze({ maxLineBytes: 1024 * 1024, maxEvents: 5000, maxToolEvents: 1000, maxResultChars: 64 * 1024, maxTextChars: 64 * 1024, summaryChars: 200, nameChars: 100 });
+export const STREAM_LIMITS = Object.freeze({ maxLineBytes: 1024 * 1024, maxEvents: 5000, maxToolEvents: 1000, maxResultChars: 64 * 1024, maxTextChars: 64 * 1024, summaryChars: 200, nameChars: 100, maxToolResultExcerpts: 200 });
+/** Upper bound of `toolResultExcerptChars` (memory.toolResultExcerptChars has the same maximum). */
+export const TOOL_RESULT_EXCERPT_MAX = 16_000; // equals capture TOOL_OUTPUT_MAX_CHARS: an excerpt never exceeds one stored tool event
+/** Raw characters looked at beyond the limit, so redaction sees a secret that crosses the cut whole. */
+export const EXCERPT_REDACT_MARGIN = 4096;
 
 const clean = (value, max) => redactText(sanitizeForTerminal(String(value ?? ""))).text.slice(0, max);
 const own = (object, key) => (object !== null && typeof object === "object" && Object.hasOwn(object, key) ? object[key] : undefined);
@@ -35,10 +48,38 @@ export function summarizeInput(input, max = STREAM_LIMITS.summaryChars) {
 }
 
 /**
- * @param {{limits?: Partial<typeof STREAM_LIMITS>, onEvent?: (event: object) => void, now?: () => number}} [options]
+ * Bounded evidence of one tool_result block (see the header). Text content only; redacted before it is cut.
+ * @returns {{toolUseId: string, isError: boolean, excerpt: string, originalChars: number, excerptChars: number, truncated: boolean}}
+ */
+export function toolResultExcerpt(block, max, nameChars = STREAM_LIMITS.nameChars) {
+  const content = own(block, "content");
+  const window = max + EXCERPT_REDACT_MARGIN;
+  let raw = "";
+  let originalChars = 0;
+  const take = (text) => {
+    if (originalChars > 0) {
+      originalChars += 1;
+      if (raw.length < window) raw += "\n";
+    }
+    originalChars += text.length;
+    if (raw.length < window) raw += text.slice(0, window - raw.length);
+  };
+  if (typeof content === "string") take(content);
+  else if (Array.isArray(content)) {
+    for (const part of content.slice(0, 200)) if (own(part, "type") === "text" && typeof own(part, "text") === "string") take(own(part, "text"));
+  }
+  const redacted = redactText(raw).text;
+  const excerpt = redacted.slice(0, max);
+  return { toolUseId: clean(own(block, "tool_use_id"), nameChars), isError: own(block, "is_error") === true, excerpt, originalChars, excerptChars: excerpt.length, truncated: originalChars > max || redacted.length > max };
+}
+
+/**
+ * @param {{limits?: Partial<typeof STREAM_LIMITS>, onEvent?: (event: object) => void, now?: () => number, toolResultExcerptChars?: number}} [options]
+ *   `toolResultExcerptChars` (0 to TOOL_RESULT_EXCERPT_MAX; default 0 = tool output is never read): bounded tool evidence, see the header.
  */
 export function createStreamParser(options = {}) {
   const limits = { ...STREAM_LIMITS, ...options.limits };
+  const excerptChars = Number.isSafeInteger(options.toolResultExcerptChars) && options.toolResultExcerptChars > 0 ? Math.min(options.toolResultExcerptChars, TOOL_RESULT_EXCERPT_MAX) : 0;
   const now = options.now ?? Date.now;
   const decoder = new TextDecoder("utf-8", { fatal: true });
   let buffer = Buffer.alloc(0);
@@ -47,7 +88,7 @@ export function createStreamParser(options = {}) {
     providerSessionId: null, model: null, usage: { inputTokens: null, outputTokens: null, cacheReadTokens: null, cacheCreationTokens: null },
     toolEvents: [], toolEventsDropped: 0, toolResults: 0, resultText: "", assistantText: "", costUsd: null,
     resultSeen: false, resultIsError: false, resultSubtype: null, initTools: 0, rateLimitEvents: 0, rateLimitStatus: null,
-    malformedLines: 0, oversizedLines: 0, eventCount: 0, droppedEvents: 0,
+    malformedLines: 0, oversizedLines: 0, eventCount: 0, droppedEvents: 0, toolResultExcerpts: [], toolResultExcerptsDropped: 0,
   };
 
   const emit = (event) => {
@@ -119,7 +160,15 @@ export function createStreamParser(options = {}) {
     } else if (type === "assistant") handleAssistant(event);
     else if (type === "user") {
       const content = own(own(event, "message"), "content");
-      if (Array.isArray(content)) for (const block of content.slice(0, 200)) if (own(block, "type") === "tool_result") state.toolResults += 1; // content is never read
+      if (Array.isArray(content)) {
+        for (const block of content.slice(0, 200)) {
+          if (own(block, "type") !== "tool_result") continue;
+          state.toolResults += 1;
+          if (excerptChars === 0) continue; // content is never read
+          if (state.toolResultExcerpts.length >= limits.maxToolResultExcerpts) state.toolResultExcerptsDropped += 1;
+          else state.toolResultExcerpts.push(toolResultExcerpt(block, excerptChars, limits.nameChars));
+        }
+      }
       emit({ kind: "tool_result" });
     } else if (type === "result") handleResult(event);
     else if (type === "rate_limit_event" || type === "rate_limit") {
@@ -181,6 +230,7 @@ export function createStreamParser(options = {}) {
         resultSeen: state.resultSeen, resultIsError: state.resultIsError, resultSubtype: state.resultSubtype,
         initTools: state.initTools, rateLimitEvents: state.rateLimitEvents, rateLimitStatus: state.rateLimitStatus,
         malformedLines: state.malformedLines, oversizedLines: state.oversizedLines, eventCount: state.eventCount, droppedEvents: state.droppedEvents,
+        ...(excerptChars > 0 ? { toolResultExcerpts: state.toolResultExcerpts.map((item) => ({ ...item })), toolResultExcerptsDropped: state.toolResultExcerptsDropped } : {}),
       };
     },
     /** Malformed lines so far (the runner stops a child that floods this). */

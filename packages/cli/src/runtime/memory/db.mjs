@@ -157,7 +157,9 @@ export function openMemory(options = {}) {
       tightenPermissions(fs, file, 0o600, platform);
     }
     db = new sqlite.DatabaseSync(file);
-    db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}; PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON; PRAGMA synchronous = NORMAL;`);
+    // The live pipeline passes a short busy timeout (a synchronous wait blocks the event loop); maintenance commands keep the default.
+    const busy = Number.isSafeInteger(options.busyTimeoutMs) && options.busyTimeoutMs >= 0 ? options.busyTimeoutMs : BUSY_TIMEOUT_MS;
+    db.exec(`PRAGMA busy_timeout = ${busy}; PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON; PRAGMA synchronous = NORMAL;`);
     try {
       db.exec("PRAGMA journal_mode = WAL;");
     } catch {
@@ -338,8 +340,19 @@ export function degradedResult(error, extra = {}) {
     status: "degraded",
     reason: code,
     message: sanitizeForTerminal(String(error?.message ?? error ?? "unknown error")).slice(0, 200),
+    ...(Number.isInteger(error?.errcode) ? { errcode: error.errcode } : {}),
     ...extra,
   };
+}
+
+/**
+ * True for a failure that says the database is locked by another connection or the disk failed (SQLITE_BUSY, SQLITE_LOCKED,
+ * SQLITE_IOERR and their extended codes): a write retried right away would block again. Accepts an error or a degraded result.
+ */
+export function isLockOrIoFailure(failure) {
+  const primary = Number.isInteger(failure?.errcode) ? failure.errcode & 0xff : null;
+  if (primary === 5 || primary === 6 || primary === 10) return true;
+  return /database (?:table )?is locked|database is busy|SQLITE_BUSY|disk I\/O error/i.test(String(failure?.message ?? ""));
 }
 
 export { SCHEMA_VERSION };

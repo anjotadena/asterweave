@@ -79,7 +79,10 @@ export const KNOWN_KEYS = Object.freeze({
   "memory.coldResumeMinutes": { type: "integer", min: 1, max: 10080, default: 60, env: "ASTERWEAVE_MEMORY_COLD_RESUME_MINUTES", description: "Idle minutes after which a resumed session is treated as a cold resume. Must be at least memory.idleRefreshMinutes." },
   "memory.contextTokenBudget": { type: "integer", min: 256, max: 200000, default: 4000, env: "ASTERWEAVE_MEMORY_CONTEXT_TOKEN_BUDGET", description: "Token budget for memory injected into a request (used by the context builder)." },
   "memory.retrievalLimit": { type: "integer", min: 1, max: 50, default: 8, env: "ASTERWEAVE_MEMORY_RETRIEVAL_LIMIT", description: "Most memory items or events returned to a request by retrieval." },
+  "memory.summaryMinNewEvents": { type: "integer", min: 1, max: 10000, default: 20, env: "ASTERWEAVE_MEMORY_SUMMARY_MIN_NEW_EVENTS", description: "New (uncovered) events a session needs before its compact summary is refreshed. Refreshes happen only then or on a meaningful state change, never on an idle timer." },
+  "memory.summaryDebounceMinutes": { type: "integer", min: 0, max: 1440, default: 10, env: "ASTERWEAVE_MEMORY_SUMMARY_DEBOUNCE_MINUTES", description: "Minimum minutes between two threshold-triggered summary refreshes of one session (a meaningful state change is not debounced)." },
   "memory.semanticSearchEnabled": { type: "boolean", default: false, description: "Allow an optional semantic retriever to rank memory. Off by default; user config only." },
+  "memory.toolResultExcerptChars": { type: "integer", min: 0, max: 16000, default: 2000, description: "Characters of each tool result's TEXT output kept in memory as bounded evidence (redacted, then cut; at most 16000, the size of one stored tool event). 0 keeps only a content-free marker. User config only." },
   "memory.claudeImportEnabled": { type: "boolean", default: false, description: "Allow importing Claude Code transcripts into memory. Off by default; user config only." },
 });
 

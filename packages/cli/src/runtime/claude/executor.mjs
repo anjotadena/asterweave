@@ -86,8 +86,12 @@ export function finalBlocks(text) {
   return group.map((block) => block.body.trim());
 }
 
-/** The prompt of one turn (stdin). The `Node:` / `Required evidence:` lines are a contract the fake claude of the tests parses. */
-export function buildPrompt(observation, graphNode) {
+/**
+ * The prompt of one turn (stdin). The `Node:` / `Required evidence:` lines are a contract the fake claude of the tests parses.
+ * `memory` (context.mjs) is the delimited <asterweave-memory> section; it comes AFTER those lines and every stored line in it is
+ * prefixed, so historical text can never take their place.
+ */
+export function buildPrompt(observation, graphNode, memory = null) {
   const evidence = graphNode?.evidence ?? [];
   const lines = [
     "You are working on one stage of an Asterweave run. Do the work with your own tools, then report.",
@@ -98,6 +102,7 @@ export function buildPrompt(observation, graphNode) {
     `Objective: ${observation.objective}`,
     `Required evidence: ${evidence.length > 0 ? evidence.join(", ") : "none"}`,
     ...(graphNode?.produces ? [`Artifact evidence needing sha256: ${graphNode.produces}`] : []),
+    ...(typeof memory === "string" && memory !== "" ? ["", memory] : []),
     ...(observation.feedback ? ["", `Feedback on your last reply (fix this): ${clean(observation.feedback, FEEDBACK_CHARS)}`] : []),
     "",
     "Finish your reply with ONLY fenced json blocks, one JSON action object per block, nothing after them:",
@@ -127,6 +132,9 @@ const addKnown = (sum, value) => (Number.isInteger(value) && value >= 0 ? (sum ?
  * @param {(id: string) => void} [options.onProviderSession]
  * @param {{items: {id: string, sha256: string, bytes: number}[], load: () => {mime: string, dataBase64: string}[]}} [options.attachments]  Images for the FIRST
  *   successful turn of the run only (later turns resume the provider session, which already holds them). `load` reads and verifies the stored copies.
+ * @param {{context?: Function, onTurn?: Function, drainEvents?: Function, toolResultExcerptChars?: number}} [options.memory]  The memory pipeline (memory/pipeline.mjs): builds the
+ *   memory section of each request, captures each turn's visible output (with bounded tool evidence when toolResultExcerptChars > 0), and hands
+ *   memory.status records to the ledger. Never required. The tool evidence goes to onTurn only: `collect` never copies it into a ledger record.
  * @param {(ids: string[]) => void} [options.onAttachmentsSent]  Called once, after the first successful turn that carried the images.
  */
 export function createClaudeExecutor(options) {
@@ -144,6 +152,7 @@ export function createClaudeExecutor(options) {
   let pendingUsage = null;
   let inflight = Promise.resolve();
   let imagesPending = Array.isArray(options.attachments?.items) && options.attachments.items.length > 0;
+  const excerptChars = Number.isSafeInteger(options.memory?.toolResultExcerptChars) && options.memory.toolResultExcerptChars > 0 ? options.memory.toolResultExcerptChars : 0;
 
   const routeFor = (node) => {
     if (!routes.has(node)) routes.set(node, resolveRoute({ config: routing ?? { default: null, effort: null, fallback: [], stages: {} }, node }));
@@ -183,8 +192,15 @@ export function createClaudeExecutor(options) {
     }
   }
 
-  async function runWithFallback(ctx, prompt) {
+  /**
+   * @param {object} ctx
+   * @param {(memoryOptions: {freshProviderSession: boolean, model: string|null}) => string} promptFor  Builds the prompt (with its memory
+   *   section) for the provider-session state and model of the turn about to run; rebuilt whenever either changes (a fallback, a reset).
+   */
+  async function runWithFallback(ctx, promptFor) {
     const node = ctx.node;
+    let prompt = null;
+    let builtFor = null;
     for (let turns = 0; turns < MAX_FALLBACK_TURNS; turns += 1) {
       const route = routeFor(node);
       const wanted = route.model ?? "default";
@@ -203,6 +219,14 @@ export function createClaudeExecutor(options) {
           throw new RunnerFailure({ class: "invalid-request", message: `the attached images could not be read: ${clean(error.message, 200)}`, remediation: "Check the session's attachments (asterweave session show), or detach the image and attach it again.", retryable: false });
         }
       }
+      // The memory section depends on whether the provider still holds the conversation (recent exchanges) and on the model's context
+      // window (budget): built for THIS turn's state, and rebuilt when a fallback or a session reset changed either.
+      const memoryOptions = { freshProviderSession: !resumeNow, model: route.model ?? null };
+      const memoryKey = `${memoryOptions.freshProviderSession}\u0000${memoryOptions.model ?? ""}`;
+      if (memoryKey !== builtFor) {
+        prompt = promptFor(memoryOptions);
+        builtFor = memoryKey;
+      }
       const turnOptions = {
         prompt, cwd, deadlineMs, maxOutputBytes, signal: ctx.signal,
         ...(route.model ? { model: route.model } : {}), ...(route.effort ? { effort: route.effort } : {}),
@@ -211,10 +235,15 @@ export function createClaudeExecutor(options) {
         ...claude, ...(claudeVersion === undefined ? {} : { claudeVersion }),
         ...(resumeNow ? { resume: providerSessionId } : { sessionId: randomUUID() }),
         ...(images ? { images } : {}),
+        // Bounded tool evidence only for a live memory pipeline that asks for it (memory.toolResultExcerptChars); otherwise the parser never reads tool output.
+        ...(excerptChars > 0 ? { toolResultExcerptChars: excerptChars } : {}),
       };
       const turn = runTurn(turnOptions);
       const result = await turn;
       collect(result, node, wanted);
+      if (options.memory?.onTurn) {
+        try { await options.memory.onTurn({ node, attempt: ctx.attempt, iteration: ctx.iteration ?? 0, result, interrupted: ctx.signal?.aborted === true }); } catch { /* memory never breaks a turn */ }
+      }
       if (images) {
         const items = options.attachments.items;
         events.push({ type: "attachments.sent", node, count: items.length, bytes: items.reduce((sum, item) => sum + item.bytes, 0), turnOk: result.ok === true, sha256: items.map((item) => item.sha256.slice(0, 12)).join(",") });
@@ -264,7 +293,16 @@ export function createClaudeExecutor(options) {
       if (queue.key === key && queue.items.length > 0) return queue.items.shift();
       queue.key = key;
       queue.items = [];
-      const work = runWithFallback(ctx, buildPrompt(observation, graph.nodes[ctx.node]));
+      const promptFor = (memoryOptions) => {
+        let memoryText = null;
+        try {
+          memoryText = options.memory?.context?.(ctx, observation, memoryOptions) ?? null;
+        } catch {
+          memoryText = null;
+        }
+        return buildPrompt(observation, graph.nodes[ctx.node], memoryText);
+      };
+      const work = runWithFallback(ctx, promptFor);
       inflight = work.catch(() => {}); // idle() waits for the whole decision, fallback turns and bookkeeping included
       const result = await work;
       const blocks = finalBlocks(result.resultText);
@@ -288,7 +326,9 @@ export function createClaudeExecutor(options) {
       return { ...report };
     },
     drainEvents() {
-      const out = events;
+      let extra = [];
+      try { extra = options.memory?.drainEvents?.() ?? []; } catch { extra = []; }
+      const out = [...events, ...extra];
       events = [];
       return out;
     },

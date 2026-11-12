@@ -423,6 +423,8 @@ const EXECUTOR_EVENTS = {
   // images sent with a turn: counts, sizes and hash PREFIXES only (comma separated), never bytes
   "attachments.sent": { count: "n", bytes: "n", turnOk: "b", sha256: "s" },
   "runner.turn": { ok: "b", class: "s", exitCode: "n", killed: "b", durationMs: "n", costUsd: "n", model: "s", malformedLines: "n", toolEventsDropped: "n" },
+  // the memory pipeline could not persist something (memory/pipeline.mjs): counts and a short reason, never content
+  "memory.status": { state: "s", reason: "s", saved: "n", failed: "n" },
 };
 
 /** A whitelisted ledger record built from what an executor reported, or null. Unknown types and fields are dropped. */
@@ -530,6 +532,14 @@ class Session {
     this.run = result.run;
     this.seq = result.seq;
     advanceCursor(this.cursor, { type: "tx", seq: result.seq, tx: { i: 0, step: meta.step ?? null, node: nodeBefore, hold: meta.hold === true } });
+    // An observer of committed transitions (the memory pipeline's checkpoints). Read-only, after the ledger write; it cannot change the run.
+    if (typeof this.o.onCommitted === "function") {
+      try {
+        this.o.onCommitted(structuredClone(this.run), result.effects.map((effect) => ({ type: effect.type, node: effect.node ?? null, outcome: effect.outcome ?? null })));
+      } catch {
+        /* an observer must not break the run */
+      }
+    }
     for (const effect of result.effects) {
       if (effect.type === "node.completed") await this.fire("node.completed", { node: effect.node, outcome: effect.outcome, next: effect.next ?? null });
     }
@@ -1275,6 +1285,7 @@ class Session {
  * @param {string} [options.repoPath] @param {string} [options.workspaceRoot] @param {string} [options.branch]
  * @param {number} [options.stepMs]       Per-step deadline.
  * @param {object} [options.guardOptions] Extra guard context (platform, homedir, userDir, env, branchOf, ...).
+ * @param {(run: object, effects: object[]) => void} [options.onCommitted]  Observer called after each committed transition (a copy of the run).
  * @param {object} [options.lockOptions]  Forwarded to acquireRunLock. @param {typeof nodeFs} [options.fs]
  * @returns {Promise<{status: string, exitCode: number, run: object, reason: string|null, decision: object|null,
  *   pendingApprovals: object[], usage: {tokens: number|null}, seq: number}>}

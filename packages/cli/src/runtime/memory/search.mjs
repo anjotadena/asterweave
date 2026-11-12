@@ -11,6 +11,7 @@
 //   to a session and never moves an expiry (the optional trace row is a separate, content-free record).
 // - HONEST ABOUT EVIDENCE: `evidence` is 'strong' (every term matched), 'weak' (partial matches only) or 'none'.
 
+import { stringifyJson } from "../../json.mjs";
 import { addDays, notExpired } from "./db.mjs";
 import { formatLocal } from "./dates.mjs";
 import { toItem } from "./items.mjs";
@@ -150,7 +151,7 @@ export function recordTrace(mem, trace, settings) {
     const at = mem.now();
     mem.db
       .prepare("INSERT INTO retrieval_traces (owner, repo_id, session_id, created_at, expires_at, selected_ids, rationale, token_estimate, cache_state, timing_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      .run(trace.owner, trace.repoId ?? null, trace.sessionId ?? null, at, addDays(at, cfg.historyRetentionDays), JSON.stringify((trace.selectedIds ?? []).slice(0, 200)), String(trace.rationale ?? "").slice(0, 200), trace.tokenEstimate ?? null, trace.cacheState ?? null, trace.timingMs ?? null);
+      .run(trace.owner, trace.repoId ?? null, trace.sessionId ?? null, at, addDays(at, cfg.historyRetentionDays), stringifyJson((trace.selectedIds ?? []).slice(0, 200)), String(trace.rationale ?? "").slice(0, 200), trace.tokenEstimate ?? null, trace.cacheState ?? null, trace.timingMs ?? null);
     return true;
   } catch {
     return false;

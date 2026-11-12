@@ -42,6 +42,9 @@ const short = (value, limit = 200) => (typeof value === "string" && value.trim()
  * @property {string|number|Date} [eventTime]  When it happened (default: now).
  * @property {'complete'|'incomplete'} [status] @property {boolean} [interrupted] @property {boolean} [complete]
  * @property {string} [artifactRef] Reference to a stored artifact (never the artifact itself).
+ * @property {number} [sourceChars] @property {boolean} [sourceTruncated]  The content was already cut by the caller (a bounded tool-output
+ *   excerpt) from a source of `sourceChars` characters: with `sourceTruncated: true` the event is stored `truncated = 1` with that length as
+ *   `original_chars`, so the metadata describes the source, not the excerpt.
  */
 
 /**
@@ -80,7 +83,10 @@ export function appendEvent(mem, sessionId, event, settings, options = {}) {
     const status = incomplete ? "incomplete" : "complete";
 
     const redacted = redactForMemory(event.content);
-    const bounded = boundText(redacted.text, type === "tool_result" || type === "tool_call" ? TOOL_OUTPUT_MAX_CHARS : MESSAGE_MAX_CHARS);
+    const cut = boundText(redacted.text, type === "tool_result" || type === "tool_call" ? TOOL_OUTPUT_MAX_CHARS : MESSAGE_MAX_CHARS);
+    // A caller that already cut the content (a bounded tool excerpt) says how long the source was: the metadata describes the source.
+    const source = event.sourceTruncated === true && Number.isSafeInteger(event.sourceChars) && event.sourceChars >= 0 ? event.sourceChars : null;
+    const bounded = source === null ? cut : { ...cut, truncated: true, originalChars: source };
 
     return transaction(mem, () => {
       const { db } = mem;
@@ -149,6 +155,22 @@ export function readEvents(mem, sessionId, { limit = 200, afterSeq = 0 } = {}) {
     )
     .all({ session: sessionId, after: afterSeq, now, limit: Math.max(1, Math.min(2000, limit)) })
     .map(toEvent);
+}
+
+/**
+ * The NEWEST events of a session (at most `limit`, after `afterSeq`), returned oldest first. Same filters as readEvents: expired events are
+ * never returned, and the caller checks the viewer may read the session. One bounded read (ORDER BY seq DESC LIMIT n), not a scan from seq 1.
+ */
+export function readLatestEvents(mem, sessionId, { limit = 24, afterSeq = 0 } = {}) {
+  const now = mem.now();
+  return mem.db
+    .prepare(
+      `SELECT id, seq, type, role, content, agent_id, model, provider, tool_call_id, event_time, ingested_at, expires_at, status, truncated, original_chars, artifact_ref
+       FROM events WHERE session_id = :session AND seq > :after AND expires_at > :now ORDER BY seq DESC LIMIT :limit`,
+    )
+    .all({ session: sessionId, after: afterSeq, now, limit: Math.max(1, Math.min(2000, limit)) })
+    .map(toEvent)
+    .reverse();
 }
 
 export function toEvent(row) {

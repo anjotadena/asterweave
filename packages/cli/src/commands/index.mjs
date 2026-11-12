@@ -18,6 +18,7 @@ import { contextCommand, contextCommandMeta } from "./context.mjs";
 import { doctorCommand, doctorCommandMeta } from "./doctor.mjs";
 import { COMMAND_HELP, helpCommand, helpCommandMeta } from "./help.mjs";
 import { hookCommand, hookCommandMeta } from "./hook.mjs";
+import { memoryCommand, memoryCommandMeta } from "./memory.mjs";
 import { pipelineCommand, pipelineCommandMeta } from "./pipeline.mjs";
 import { repoCommand, repoCommandMeta } from "./repo.mjs";
 import { mcpCommand, mcpCommandMeta } from "./mcp.mjs";
@@ -83,6 +84,7 @@ export function registerAllCommands(registry, { loadLaunch } = {}) {
   add("usage", usageCommand, usageCommandMeta);
   add("model", modelCommand, modelCommandMeta);
   add("mcp", mcpCommand, mcpCommandMeta);
+  add("memory", memoryCommand, memoryCommandMeta);
   add("hook", hookCommand, hookCommandMeta);
   return registry;
 }

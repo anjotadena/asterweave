@@ -229,7 +229,108 @@ DROP TABLE IF EXISTS repos;
 DROP TABLE IF EXISTS meta;
 `;
 
+const V2_UP = `
+-- M2: the live pipeline. Sessions remember the file session they belong to (a file session spans many runs; a memory session is
+-- one run: task_id = runId), the branch and the worktree. A checkpoint carries the session summary (with its own coverage
+-- watermark) and an integrity digest. Traces name the run/request they were written for. A content-free version counter in meta
+-- moves on every change that can alter what retrieval may return (the context cache is keyed by it).
+ALTER TABLE sessions ADD COLUMN external_session_id TEXT;
+ALTER TABLE sessions ADD COLUMN branch TEXT;
+ALTER TABLE sessions ADD COLUMN worktree_id TEXT;
+CREATE INDEX sessions_external ON sessions(external_session_id);
+ALTER TABLE checkpoints ADD COLUMN summary TEXT;
+ALTER TABLE checkpoints ADD COLUMN summary_covered_seq INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE checkpoints ADD COLUMN digest TEXT;
+ALTER TABLE retrieval_traces ADD COLUMN run_id TEXT;
+ALTER TABLE retrieval_traces ADD COLUMN node TEXT;
+ALTER TABLE retrieval_traces ADD COLUMN attempt INTEGER;
+ALTER TABLE retrieval_traces ADD COLUMN memory_tokens INTEGER;
+ALTER TABLE retrieval_traces ADD COLUMN estimated INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE retrieval_traces ADD COLUMN cache_hit INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE retrieval_traces ADD COLUMN stats TEXT;
+CREATE INDEX retrieval_traces_run ON retrieval_traces(run_id);
+INSERT OR IGNORE INTO meta (key, value) VALUES ('memory_version', '0');
+CREATE TRIGGER mv_items_ai AFTER INSERT ON memory_items BEGIN UPDATE meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'memory_version'; END;
+CREATE TRIGGER mv_items_au AFTER UPDATE ON memory_items BEGIN UPDATE meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'memory_version'; END;
+CREATE TRIGGER mv_items_ad AFTER DELETE ON memory_items BEGIN UPDATE meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'memory_version'; END;
+CREATE TRIGGER mv_events_ad AFTER DELETE ON events BEGIN UPDATE meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'memory_version'; END;
+CREATE TRIGGER mv_sessions_au AFTER UPDATE OF visibility, state ON sessions BEGIN UPDATE meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'memory_version'; END;
+CREATE TRIGGER mv_sessions_ad AFTER DELETE ON sessions BEGIN UPDATE meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'memory_version'; END;
+CREATE TRIGGER mv_checkpoints_ad AFTER DELETE ON checkpoints BEGIN UPDATE meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'memory_version'; END;
+CREATE TRIGGER mv_tombstones_ai AFTER INSERT ON tombstones BEGIN UPDATE meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'memory_version'; END;
+`;
+
+const V2_DOWN = `
+DROP TRIGGER IF EXISTS mv_tombstones_ai;
+DROP TRIGGER IF EXISTS mv_checkpoints_ad;
+DROP TRIGGER IF EXISTS mv_sessions_ad;
+DROP TRIGGER IF EXISTS mv_sessions_au;
+DROP TRIGGER IF EXISTS mv_events_ad;
+DROP TRIGGER IF EXISTS mv_items_ad;
+DROP TRIGGER IF EXISTS mv_items_au;
+DROP TRIGGER IF EXISTS mv_items_ai;
+DELETE FROM meta WHERE key = 'memory_version';
+DROP INDEX IF EXISTS retrieval_traces_run;
+ALTER TABLE retrieval_traces DROP COLUMN stats;
+ALTER TABLE retrieval_traces DROP COLUMN cache_hit;
+ALTER TABLE retrieval_traces DROP COLUMN estimated;
+ALTER TABLE retrieval_traces DROP COLUMN memory_tokens;
+ALTER TABLE retrieval_traces DROP COLUMN attempt;
+ALTER TABLE retrieval_traces DROP COLUMN node;
+ALTER TABLE retrieval_traces DROP COLUMN run_id;
+ALTER TABLE checkpoints DROP COLUMN digest;
+ALTER TABLE checkpoints DROP COLUMN summary_covered_seq;
+ALTER TABLE checkpoints DROP COLUMN summary;
+DROP INDEX IF EXISTS sessions_external;
+ALTER TABLE sessions DROP COLUMN worktree_id;
+ALTER TABLE sessions DROP COLUMN branch;
+ALTER TABLE sessions DROP COLUMN external_session_id;
+`;
+
+const V3_UP = `
+-- M3: the opt-in Claude Code transcript import (claude-import.mjs). One row per transcript file: how far it was read (a byte
+-- offset that always ends on a complete line), the size and mtime seen then, and the last record uuid with the offset where its
+-- line starts, so a rotated, truncated or compacted file is detected and rescanned. Paths only: no transcript content.
+CREATE TABLE claude_import_files (
+  path              TEXT PRIMARY KEY,
+  repo_id           TEXT NOT NULL,
+  size              INTEGER NOT NULL,
+  offset            INTEGER NOT NULL,
+  last_uuid         TEXT,
+  last_uuid_offset  INTEGER,
+  mtime             TEXT,
+  imported_at       TEXT NOT NULL,
+  rescans           INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX claude_import_files_repo ON claude_import_files(repo_id);
+`;
+
+const V3_DOWN = `
+DELETE FROM meta WHERE key = 'claude_import_last_at';
+DROP INDEX IF EXISTS claude_import_files_repo;
+DROP TABLE IF EXISTS claude_import_files;
+`;
+
+// V4: a clone without a remote is identified by its path only, so a different repository at a reused path (rm -rf + git init, a
+// reused folder) would inherit the old memory. The ANCHOR is something intrinsic recorded at bind time (identity.mjs): the root
+// commit(s) (`git:<sha>,...`), `unborn` before the first commit, or `dir:<ino>:<birthtime>` outside git. NULL = recorded before V4.
+// An ambiguity raised by an anchor mismatch keeps `observed = '<none>'` and names the anchor seen in `observed_anchor`.
+const V4_UP = `
+ALTER TABLE repo_clones ADD COLUMN anchor TEXT;
+ALTER TABLE repo_ambiguities ADD COLUMN observed_anchor TEXT;
+`;
+
+const V4_DOWN = `
+ALTER TABLE repo_ambiguities DROP COLUMN observed_anchor;
+ALTER TABLE repo_clones DROP COLUMN anchor;
+`;
+
 /** @type {ReadonlyArray<{version: number, name: string, up: string, down: string}>} */
-export const MIGRATIONS = Object.freeze([{ version: 1, name: "initial memory schema", up: V1_UP, down: V1_DOWN }]);
+export const MIGRATIONS = Object.freeze([
+  { version: 1, name: "initial memory schema", up: V1_UP, down: V1_DOWN },
+  { version: 2, name: "live pipeline: session links, summaries, trace detail, memory version", up: V2_UP, down: V2_DOWN },
+  { version: 3, name: "Claude Code import watermarks", up: V3_UP, down: V3_DOWN },
+  { version: 4, name: "clone anchors: intrinsic identity of a clone without a remote", up: V4_UP, down: V4_DOWN },
+]);
 
 export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

@@ -20,6 +20,9 @@ import { listSessions, loadSession } from "../runtime/sessions.mjs";
 import { buildAccountingView, formatAccounting, formatAccountingCompact, formatAttachmentLines, formatUsageCompact } from "../runtime/usage-view.mjs";
 import { resolveRepo } from "./run.mjs";
 import { seams } from "./shared.mjs";
+import { listTraces, traceTotals } from "../runtime/memory/context.mjs";
+import { openMemory } from "../runtime/memory/db.mjs";
+import { existingOwner } from "../runtime/memory/sessions.mjs";
 import { buildUsageReport, limitsOf } from "./usage.mjs";
 
 export const contextCommandMeta = Object.freeze({ summary: "Show context size, cumulative usage and budgets of a run (read-only)", boolean: ["json"], options: ["json", "session"] });
@@ -146,6 +149,31 @@ export async function collectAccounting(ctx, { repoKey, runId = null, sessionId 
   return { view, usageReport, run, session };
 }
 
+/**
+ * What the memory context builder attached to this run's requests (memory/context.mjs traces): totals only, never content.
+ * null when there is no memory store or no trace for the run (the view is then exactly what it was before memory existed).
+ * Memory tokens are ESTIMATES (characters / 4); the provider's own input/output/cached counts are the usage lines above.
+ */
+export function memoryContextOf(ctx, runId) {
+  if (!runId) return null;
+  let mem = null;
+  try {
+    mem = openMemory({ ...seams(ctx), ...(ctx.userDir ? { userDir: ctx.userDir } : {}), ...(ctx.now ? { now: ctx.now } : {}), ...(ctx.loadSqlite ? { loadSqlite: ctx.loadSqlite } : {}), create: false });
+    if (mem === null) return null;
+    const owner = ctx.memoryOwner ?? existingOwner(mem);
+    if (!owner) return null;
+    const traces = listTraces(mem, { owner, runId, limit: 1000 });
+    if (traces.length === 0) return null;
+    return { runId, ...traceTotals(traces) };
+  } catch {
+    return null;
+  } finally {
+    mem?.close();
+  }
+}
+
+const memoryLine = (m) => `Memory      ${m.requests} request(s) with memory built, ~${m.memoryTokens} memory tokens injected (estimated, chars/4), ${m.selected} memories selected, cache ${m.cacheHits} hit(s) / ${m.cacheMisses} miss(es), ${m.retrievalMs} ms retrieval; summary/extraction tokens 0 (deterministic). Details: asterweave memory trace ${m.runId}`;
+
 /** Handler for `asterweave context [runId | --session id]`. */
 export async function contextCommand(ctx) {
   const [runId, ...extra] = ctx.positionals ?? [];
@@ -154,9 +182,10 @@ export async function contextCommand(ctx) {
   if (sessionId !== undefined && (typeof sessionId !== "string" || sessionId === "")) throw new UsageError("--session needs a session id.", { remediation: USAGE });
   if (runId !== undefined && sessionId !== undefined) throw new UsageError("Give either a run id or --session, not both.", { remediation: USAGE });
   const repo = await resolveRepo(ctx);
-  const { view } = await collectAccounting(ctx, { repoKey: repo.key, runId: runId ?? null, sessionId: sessionId ?? null, pickSession: runId === undefined && sessionId === undefined });
-  if (ctx.options?.json === true) ctx.stdout.write(`${stringifyJson({ ok: true, context: view })}\n`);
-  else ctx.stdout.write(`${sanitizeLines(formatAccounting(view))}\n`);
+  const { view, run } = await collectAccounting(ctx, { repoKey: repo.key, runId: runId ?? null, sessionId: sessionId ?? null, pickSession: runId === undefined && sessionId === undefined });
+  const memory = memoryContextOf(ctx, run?.runId ?? null);
+  if (ctx.options?.json === true) ctx.stdout.write(`${stringifyJson({ ok: true, context: memory ? { ...view, memory } : view })}\n`);
+  else ctx.stdout.write(`${sanitizeLines([...formatAccounting(view), ...(memory ? [memoryLine(memory)] : [])])}\n`);
   return EXIT.OK;
 }
 

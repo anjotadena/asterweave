@@ -15,6 +15,8 @@
 // They drive the loop with the scripted fake executor and a SIMULATED tool dispatcher: no tool is carried out (hooks
 // and the read-only git queries of resolveRepo do spawn processes). `resume` takes the script again because the
 // ledger does not store it.
+// Memory is wired exactly as for the Claude runner (startMemory + attachMemory): the goal and each scripted action are captured,
+// and a memory section is built before each decision (the scripted executor has no prompt, so nothing reads it).
 //
 // Approvals come only from a person at a terminal: the y/N prompt (stdin AND stdout are a TTY), or the flags
 // `--approval` + `--subject` (the hash prefix `run show` prints) + `--nonce`, the one-time code that the SUPERVISING
@@ -54,7 +56,8 @@ import { resolveModelConfig } from "../config.mjs";
 import { worktreeRootProblem } from "../runtime/repo-root.mjs";
 import { askYesNo, withTerminal } from "../tui/session.mjs";
 import { createTerminal } from "../tui/terminal.mjs";
-import { resumeClaudeRun, startClaudeRun } from "./run-runner.mjs";
+import { memoryInfoOf, resumeClaudeRun, startClaudeRun, startMemory, withMemoryFinish } from "./run-runner.mjs";
+import { attachMemory } from "../runtime/memory/pipeline.mjs";
 import { isInteractive, seams, stringOption } from "./shared.mjs";
 
 export const runCommandMeta = Object.freeze({
@@ -690,7 +693,7 @@ function nonceAnnouncer(ctx) {
   };
 }
 
-async function drive(ctx, { loop, loopOptions, dir, graph, executor, policy, hooks, repo, branch, run, finish, imageInfo }) {
+async function drive(ctx, { loop, loopOptions, dir, graph, executor, policy, hooks, repo, branch, run, finish, imageInfo, memoryInfo }) {
   const interrupt = interruptSignal(ctx);
   try {
     const result = await loop({
@@ -713,9 +716,12 @@ async function drive(ctx, { loop, loopOptions, dir, graph, executor, policy, hoo
     });
     // An interrupted claude turn is fully gone (process tree killed) before the command returns; an executor that never settles cannot hang it.
     await Promise.race([executor.idle?.(), new Promise((resolve) => { setTimeout(resolve, 10_000).unref?.(); })]);
-    try { finish?.(result); } catch { /* a convenience record must not change the outcome */ }
+    try { await finish?.(result); } catch { /* a convenience record must not change the outcome */ }
     // Images sent with the first turn: hashes and sizes only (never bytes). Present only when the run was started with images.
-    const summary = { ...summarize(result, run ?? result.run, insideRun(ctx)), ...(imageInfo ? { attachments: imageInfo.views, ...(imageInfo.warnings.length > 0 ? { imageWarnings: imageInfo.warnings } : {}) } : {}) };
+    // Memory appears in the result ONLY when it could not persist something (never a claim that anything was saved).
+    let memory = null;
+    try { memory = memoryInfo?.() ?? null; } catch { memory = null; }
+    const summary = { ...summarize(result, run ?? result.run, insideRun(ctx)), ...(imageInfo ? { attachments: imageInfo.views, ...(imageInfo.warnings.length > 0 ? { imageWarnings: imageInfo.warnings } : {}) } : {}), ...(memory ? { memory } : {}) };
     report(ctx, summary);
     return result.exitCode;
   } finally {
@@ -759,7 +765,17 @@ async function startRun(ctx, rest, deps) {
   const created = createRunForGraph({ graph, goal, repo: { key: repo.key, realpath: repo.workspace }, runId, policyHash: policy.policyHash, routing, ...seams(ctx) });
   const recorded = { audit: ["repo-audit", "discovery"], contribute: ["contribute", "implement"], bugfix: ["bug-fix", "implement"] }[graph.id];
   if (recorded) initContribution(created.dir, { skill: recorded[0], workflow: graph.id, objective: goal, level: recorded[1] });
-  return drive(ctx, { ...deps, dir: created.dir, graph, executor, policy, hooks, repo, branch, run: created.run });
+  return driveWithMemory(ctx, deps, { dir: created.dir, graph, executor, policy, hooks, repo, branch, run: created.run });
+}
+
+/** The fake executor path with the same memory pipeline as the Claude runner (attachMemory: section per decision, capture of each action). */
+async function driveWithMemory(ctx, deps, { executor, run, repo, branch, ...rest }) {
+  const memory = await startMemory(ctx, deps, { repo, run, workspace: repo.workspace, branch, externalSessionId: null, providerContextLost: true });
+  try {
+    return await drive(ctx, { ...deps, ...rest, loopOptions: { ...deps.loopOptions, ...(memory ? { onCommitted: memory.onCommitted } : {}) }, executor: attachMemory(executor, memory), run, repo, branch, finish: withMemoryFinish(() => {}, memory), memoryInfo: memoryInfoOf(memory) });
+  } finally {
+    memory?.close();
+  }
 }
 
 async function resumeRun(ctx, rest, deps) {
@@ -777,7 +793,7 @@ async function resumeRun(ctx, rest, deps) {
   const policy = loadPolicy(seams(ctx));
   const hooks = loadHooks({ ...seams(ctx), repoPath: repo.workspace });
   const branch = await currentBranch(ctx, repo.workspace);
-  return drive(ctx, { ...deps, dir, graph, executor, policy, hooks, repo, branch, run });
+  return driveWithMemory(ctx, deps, { dir, graph, executor, policy, hooks, repo, branch, run });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -788,8 +804,8 @@ async function resumeRun(ctx, rest, deps) {
  * Handler factory. `runLoopImpl`, `loopOptions`, `claude` (claudePath, claudeArgs, spawn, exists), `runTurn`, `runnerOptions`, `catalog` (model catalog for the image check) and `imageStore` ({listAttachments}) are test seams.
  * @param {{runLoopImpl?: typeof runLoop, loopOptions?: object}} [seamsIn]
  */
-export function createRunCommand({ runLoopImpl = runLoop, loopOptions = {}, claude, runTurn, runnerOptions, catalog, imageStore } = {}) {
-  const runner = { ...(claude ? { claude } : {}), ...(runTurn ? { runTurn } : {}), ...(runnerOptions ? { runnerOptions } : {}), ...(catalog ? { catalog } : {}), ...(imageStore ? { imageStore } : {}) };
+export function createRunCommand({ runLoopImpl = runLoop, loopOptions = {}, claude, runTurn, runnerOptions, catalog, imageStore, memory } = {}) {
+  const runner = { ...(claude ? { claude } : {}), ...(runTurn ? { runTurn } : {}), ...(runnerOptions ? { runnerOptions } : {}), ...(catalog ? { catalog } : {}), ...(imageStore ? { imageStore } : {}), ...(memory ? { memory } : {}) };
   return async function run(ctx) {
     const [sub, ...rest] = ctx.positionals ?? [];
     if (sub === undefined) throw new UsageError("Missing run subcommand.", { remediation: PUBLIC_USAGE });

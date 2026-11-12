@@ -30,7 +30,7 @@ test("the validator rejects bad extended metadata and leaves legacy skills alone
     assert.ok(result.errors.some((e) => /alias review already belongs/.test(e)));
     writeFileSync(file, original.replace("asterweave-skill: 1", "asterweave-skill: 7"));
     assert.ok(validatePlugin(root).errors.some((e) => /unsupported asterweave-skill version 7/.test(e)));
-    writeFileSync(file, original.replace(/^outputs:.*\n/m, ""));
+    writeFileSync(file, original.replace(/^outputs:.*\r?\n/m, "")); // \r?: a Windows checkout has CRLF, and `.` never matches \r
     assert.ok(validatePlugin(root).errors.some((e) => /missing outputs/.test(e)));
   } finally {
     rmSync(root, { recursive: true, force: true });

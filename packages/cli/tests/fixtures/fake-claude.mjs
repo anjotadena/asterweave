@@ -5,7 +5,7 @@
 //   version      text printed for --version (default "2.1.5 (Claude Code)")
 //   mode         success | fail | error-result | malformed | huge-line | huge-output | hang | ignore-sigterm | grandchild |
 //                no-stdin-read | no-result | slow-stdin (default success)
-//   sessionId, model, tools, toolUses [{id,name,input}], text, usage, costUsd, resultText, exitCode, stderr
+//   sessionId, model, tools, toolUses [{id,name,input}], toolResultId, toolResultContent (string or blocks), text, usage, costUsd, resultText, exitCode, stderr
 //   record       file to write {argv, stdinBytes, stdinSha256, envKeys, env, cwd} to (secrets must be checked by key name)
 //   pidFile      file to write the grandchild pid to (mode grandchild)
 //   rejectImages true: a turn whose stream-json input carries image blocks fails with an error result
@@ -59,7 +59,7 @@ function emitBody(stdin = Buffer.alloc(0), input = null) {
   if (mode === "success" || mode === "no-stdin-read") {
     init();
     for (const use of scenario.toolUses ?? []) out({ type: "assistant", message: { content: [{ type: "text", text: scenario.text ?? "working" }, { type: "tool_use", id: use.id, name: use.name, input: use.input }] } });
-    if ((scenario.toolUses ?? []).length > 0) out({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "x", content: "SECRET-OUTPUT" }] } });
+    if ((scenario.toolUses ?? []).length > 0) out({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: scenario.toolResultId ?? "x", content: scenario.toolResultContent ?? "SECRET-OUTPUT" }] } });
     resultEvent();
     process.exitCode = scenario.exitCode ?? 0;
   } else if (mode === "report-hang") {
