@@ -1,7 +1,7 @@
 ---
 sidebar_position: 5
 title: Runs
-description: "Asterweave CLI runs (Phase B): run show, approve and abort, the delivery and bugfix graphs, budgets, approvals, crash recovery and the run lock. Everything is simulated: no real tool execution and no model calls."
+description: "Asterweave CLI runs (Phase B): run show, approve and abort, the delivery and bugfix graphs, budgets, approvals, crash recovery and the run lock. run start and run resume drive Claude Code; the development-only fake executor simulates everything."
 ---
 
 # Runs
@@ -11,7 +11,7 @@ A **run** is one pass of a workflow graph (`delivery@1` or `bugfix@1`) over a go
 :::caution What is simulated with the fake executor
 This page describes the run engine. With the **fake executor** (a development switch), **nothing is carried out for real and no model is called**. A normal `run start` drives Claude Code instead, and Claude executes its own tools: see [the runner](/cli/runner) for what is guarded and how. The rest of this paragraph describes the fake executor.
 
-**The fake executor carries out no tool for real and calls no model.** There are **no model calls** and **no real tool execution**. The only executor is a scripted **fake executor** that replays a JSON file of actions, and the tool dispatcher is a simulation that records what it was asked to do and returns canned results. Every action still goes through the full guard, hooks, budgets and audit trail, so the safety behavior is real, but no action of a run writes a file, runs a command or touches the network. Exactly what does run on your machine: the **hooks** you configured (processes started without a shell; see [Hooks](/cli/hooks)), and the read-only `git` queries that identify the repository. The same simulation is why two safety limits below are deliberately advisory: a real tool dispatcher must not ship before approvals have a non-forgeable path (for example a per-request nonce shown only on an interactive terminal, with only its hash stored, or terminal-only grants) and the processes it starts are isolated by the operating system. The commands that start or resume a run are hidden behind an environment variable (see [Development commands](#development-commands-hidden)). A real executor arrives in a later phase.
+**The fake executor carries out no tool for real and calls no model.** There are **no model calls** and **no real tool execution**. It is a scripted executor that replays a JSON file of actions, and the tool dispatcher is a simulation that records what it was asked to do and returns canned results. Every action still goes through the full guard, hooks, budgets and audit trail, so the safety behavior is real, but no action of a run writes a file, runs a command or touches the network. Exactly what does run on your machine: the **hooks** you configured (processes started without a shell; see [Hooks](/cli/hooks)), and the read-only `git` queries that identify the repository. The same simulation is why two safety limits below are deliberately advisory: a real tool dispatcher must not ship before approvals have a non-forgeable path (for example a per-request nonce shown only on an interactive terminal, with only its hash stored, or terminal-only grants) and the processes it starts are isolated by the operating system. Only the fake executor is hidden behind an environment variable; `run start` and `run resume` themselves are public and use the Claude runner (see [Development commands](#development-commands-scripted-fake-executor)).
 :::
 
 ## Public commands
